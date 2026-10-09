@@ -25,6 +25,12 @@
 | :---: | :---: | :---: |
 | [![Futures](docs/screenshots/futures.png)](docs/screenshots/futures.png) | [![Challenges](docs/screenshots/challenges.png)](docs/screenshots/challenges.png) | [![Settings](docs/screenshots/settings.png)](docs/screenshots/settings.png) |
 
+<details>
+<summary>View the marketing page</summary>
+<br />
+<p align="center"><a href="docs/screenshots/landing.png"><img src="docs/screenshots/landing.png" alt="ALPHA TERMINAL landing page" width="900" /></a></p>
+</details>
+
 ## Why this project exists
 
 Trading interfaces make it easy to focus on execution and forget process. ALPHA TERMINAL is designed as a deliberate practice environment: every account has virtual capital, every balance-changing action is recorded server-side, and stale or ambiguous market data is rejected instead of silently producing a misleading result.
@@ -116,7 +122,7 @@ Docker is optional. The application can be developed, tested, built, and run dir
 ### 1. Install dependencies
 
 ```bash
-git clone https://github.com/<your-account>/alpha-terminal.git
+git clone https://github.com/DragonPlayz-1/alpha-terminal.git
 cd alpha-terminal
 npm ci
 ```
@@ -290,6 +296,9 @@ npm test
 npm run build
 npm run test:e2e
 npm audit
+
+# Recreate the anonymized README screenshots locally
+npm run screenshots
 ```
 
 The E2E suite builds and starts a copied standalone artifact, exercises the production HTTP surface with Playwright, verifies session/order/privacy behavior, tests oversized chunked bodies, covers recovery email flows, and checks worker exclusivity and takeover.

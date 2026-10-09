@@ -82,11 +82,26 @@ async function prepareDemoData() {
     create: { id: "weekly-discipline-challenge", name: "The 7-Day Discipline", description: "Build positive simulated performance while keeping your decisions measured.", startingCapital: "10000", startTime: new Date(Date.now() - 86_400_000), endTime: new Date(Date.now() + 6 * 86_400_000), configuration: { eligibleMarkets: ["CRYPTO"], maxLeverage: 1, ranking: "return_percentage", minimumTrades: 1 }, status: "ACTIVE" },
     update: { status: "ACTIVE", startTime: new Date(Date.now() - 86_400_000), endTime: new Date(Date.now() + 6 * 86_400_000) },
   });
+  const btc = await db.instrument.findUnique({ where: { symbol: "BTC-USD" } });
+  if (btc) {
+    const anchor = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    await db.marketCandle.createMany({
+      skipDuplicates: true,
+      data: Array.from({ length: 80 }, (_, index) => {
+        const open = 76_800 + index * 72 + Math.sin(index / 4) * 420;
+        const close = open + Math.sin(index * 1.7) * 180 + 80;
+        const high = Math.max(open, close) + 160 + (index % 5) * 18;
+        const low = Math.min(open, close) - 145 - (index % 4) * 15;
+        const openTime = new Date(anchor - (79 - index) * 3_600_000);
+        return { instrumentId: btc.id, timeframe: "1h", openTime, closeTime: new Date(openTime.getTime() + 3_600_000), open: open.toFixed(2), high: high.toFixed(2), low: low.toFixed(2), close: close.toFixed(2), volume: (120 + index * 2.4).toFixed(2), isComplete: true };
+      }),
+    });
+  }
 }
 
 async function capture() {
   mkdirSync(output, { recursive: true });
-  const credentials = { username: `demo_${randomUUID().replaceAll("-", "").slice(0, 10)}`, email: `demo_${randomUUID().replaceAll("-", "").slice(0, 10)}@example.test`, password: "demo-screenshot-password-2026", initialCapital: 10000 };
+  const credentials = { username: "demo_trader", email: "demo@example.test", password: "demo-screenshot-password-2026", initialCapital: 10000 };
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -103,6 +118,11 @@ async function capture() {
       return { status: response.status, body: await response.json() };
     }, randomUUID());
     if (order.status !== 201) throw new Error(`Could not create screenshot demo order: ${JSON.stringify(order.body)}`);
+    const derivativeOrder = await page.evaluate(async clientOrderId => {
+      const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: "BTC-PERP", side: "BUY", orderType: "MARKET", quantity: "0.01", leverage: 5, positionSide: "LONG", clientOrderId, timeInForce: "IOC" }) });
+      return { status: response.status, body: await response.json() };
+    }, randomUUID());
+    if (derivativeOrder.status !== 201) throw new Error(`Could not create screenshot derivative position: ${JSON.stringify(derivativeOrder.body)}`);
 
     const pages = [
       ["landing", "/"],
@@ -115,7 +135,7 @@ async function capture() {
     ] as const;
     for (const [name, path] of pages) {
       await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(path.startsWith("/terminal") ? 9500 : 1200);
       await page.screenshot({ path: join(output, `${name}.png`), fullPage: true, animations: "disabled" });
     }
   } finally {
