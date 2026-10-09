@@ -1,0 +1,56 @@
+name: Production E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Chromium production flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: alpha_terminal
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: alpha_terminal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U alpha_terminal -d alpha_terminal"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://alpha_terminal:ci-password@localhost:5432/alpha_terminal?schema=public
+      SESSION_SECRET: ci-only-session-secret-012345678901234567890123456789
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+      APP_URL: http://127.0.0.1:3100
+      MARKET_PROVIDER: coinbase
+      QUOTE_MAX_AGE_MS: 15000
+      TRADING_FEE_RATE: 0.001
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run production E2E suite
+        run: npm run test:e2e

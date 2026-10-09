@@ -1,0 +1,2 @@
+import { TerminalClient } from "@/components/terminal-client";
+export default async function AssetDetailPage({ params, searchParams }: { params: Promise<{ symbol: string }>; searchParams: Promise<{ scope?: string }> }) { const { symbol } = await params; const query = await searchParams; return <TerminalClient initialSymbol={decodeURIComponent(symbol).toUpperCase()} initialScope={query.scope ?? "main"} />; }
