@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #080a0f;
+  --bg-soft: #0d1119;
+  --surface: #121824;
+  --surface-strong: #171f2d;
+  --surface-muted: #0f141e;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-soft: rgba(255, 255, 255, 0.055);
+  --text: #f1f5f9;
+  --muted: #8b95a7;
+  --muted-strong: #b6c0d1;
+  --positive: #36d399;
+  --negative: #fb7185;
+  --accent: #8b8cff;
+  --accent-bright: #a3a4ff;
+  --cyan: #70d6ff;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 79% -5%, rgba(139, 140, 255, 0.1), transparent 30rem),
+    radial-gradient(circle at -10% 100%, rgba(112, 214, 255, 0.06), transparent 28rem),
+    var(--bg);
+  font-family: Arial, Helvetica, sans-serif;
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+.glass {
+  background: linear-gradient(145deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 55px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.025);
+  backdrop-filter: blur(18px);
+}
+.surface { background: var(--surface); border: 1px solid var(--line-soft); }
+.surface-soft { background: var(--surface-muted); border: 1px solid var(--line-soft); }
+.hairline { border-color: var(--line-soft); }
+
+@keyframes pulse-live { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.animate-slide-up { animation: slide-up .35s ease-out both; }
+.live-dot { animation: pulse-live 1.8s ease-in-out infinite; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(139, 149, 167, .23); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139, 149, 167, .4); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

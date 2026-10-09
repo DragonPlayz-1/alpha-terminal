@@ -1,0 +1,16 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Bell, CheckCheck, CircleAlert, Info, RefreshCcw, ShieldAlert, Trophy, Zap } from "lucide-react";
+import { Badge, Button, Card, SectionHeading, Skeleton } from "@/components/ui";
+import { formatRelativeTime } from "@/lib/format";
+
+type Notification = { id: string; notificationType: string; title: string; message: string; readAt: string | null; createdAt: string };
+export function NotificationsClient() {
+  const [rows, setRows] = useState<Notification[]>([]); const [loading, setLoading] = useState(true);
+  async function load() { const body = await (await fetch("/api/notifications")).json(); setRows(body.data?.notifications ?? []); setLoading(false); }
+  useEffect(() => { load(); }, []);
+  async function markRead(id?: string) { await fetch("/api/notifications", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(id ? { id } : {}) }); setRows(current => current.map(row => id && row.id !== id ? row : { ...row, readAt: new Date().toISOString() })); }
+  return <div className="mx-auto max-w-4xl animate-slide-up"><SectionHeading eyebrow="Account feed" title="Notifications" description="Order events, risk events, achievements, and challenge updates from your server-side account." action={<Button variant="secondary" onClick={load}><RefreshCcw size={15} /> Refresh</Button>} />{rows.some(row => !row.readAt) && <div className="mb-5 flex justify-end"><button onClick={() => markRead()} className="flex items-center gap-2 text-xs font-semibold text-[var(--accent-bright)] hover:text-white"><CheckCheck size={14} /> Mark all read</button></div>}<Card className="overflow-hidden">{loading ? <div className="space-y-3 p-5">{[1, 2, 3].map(i => <Skeleton key={i} className="h-20" />)}</div> : rows.length ? <div className="divide-y divide-white/[.05]">{rows.map(row => <button key={row.id} onClick={() => markRead(row.id)} className={`flex w-full gap-4 px-5 py-4 text-left transition-colors hover:bg-white/[.035] ${row.readAt ? "opacity-65" : "bg-[var(--accent)]/[.035]"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[.06] text-[var(--accent-bright)]"><NotificationIcon type={row.notificationType} /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-3"><span className="text-sm font-semibold text-white">{row.title}</span>{!row.readAt && <Badge tone="accent">New</Badge>}</span><span className="mt-1 block text-xs leading-5 text-[var(--muted)]">{row.message}</span><span className="mt-2 block text-[10px] text-[#657187]">{formatRelativeTime(row.createdAt)}</span></span></button>)}</div> : <div className="p-16 text-center"><Bell size={25} className="mx-auto mb-4 text-[#657187]" /><div className="text-sm font-semibold text-white">Your notification center is clear</div><p className="mt-2 text-xs text-[var(--muted)]">Order fills and important account events will appear here.</p></div>}</Card></div>;
+}
+function NotificationIcon({ type }: { type: string }) { if (type === "LIQUIDATION") return <ShieldAlert size={17} />; if (type === "ACHIEVEMENT") return <Trophy size={17} />; if (type === "ORDER_REJECTED") return <CircleAlert size={17} />; if (type === "CHALLENGE") return <Zap size={17} />; return <Info size={17} />; }

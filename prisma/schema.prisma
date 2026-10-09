@@ -1,0 +1,606 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum AccountType {
+  SPOT
+  MARGIN
+  FUTURES
+}
+
+enum AssetClass {
+  CRYPTO
+  STOCK
+  ETF
+  FOREX
+  COMMODITY
+  INDEX
+}
+
+enum InstrumentType {
+  SPOT
+  PERPETUAL
+  FUTURE
+}
+
+enum TradingStatus {
+  ACTIVE
+  HALTED
+  DELISTED
+  DATA_UNAVAILABLE
+}
+
+enum MarketDataMode {
+  LIVE
+  DELAYED
+  REPLAY
+  FIXTURE
+  UNAVAILABLE
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP_MARKET
+  STOP_LIMIT
+  TAKE_PROFIT
+  TAKE_PROFIT_LIMIT
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  REJECTED
+  EXPIRED
+}
+
+enum TimeInForce {
+  GTC
+  IOC
+  FOK
+  DAY
+}
+
+enum PositionSide {
+  LONG
+  SHORT
+}
+
+enum LedgerTransactionType {
+  INITIAL_CAPITAL
+  DEPOSIT
+  WITHDRAWAL
+  ORDER_SETTLEMENT
+  FEE
+  FUNDING
+  REALIZED_PNL
+  LIQUIDATION
+  ADJUSTMENT
+}
+
+enum LedgerEntryType {
+  CASH
+  ASSET
+  FEE
+  PNL
+  MARGIN
+  FUNDING
+}
+
+enum NotificationType {
+  ORDER_FILLED
+  ORDER_TRIGGERED
+  ORDER_REJECTED
+  ORDER_CANCELLED
+  LIQUIDATION
+  ACHIEVEMENT
+  CHALLENGE
+  LEADERBOARD
+  PRICE_ALERT
+  SYSTEM
+}
+
+model User {
+  id                   String                 @id @default(cuid())
+  username             String                 @unique
+  email                String                 @unique
+  passwordHash         String
+  avatarUrl            String?
+  role                 UserRole               @default(USER)
+  accountStatus        AccountStatus          @default(ACTIVE)
+  emailVerifiedAt      DateTime?
+  isGuest              Boolean                @default(false)
+  publicProfile        Boolean                @default(true)
+  publicHistory        Boolean                @default(false)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  sessions             Session[]
+  preferences          UserPreference?
+  tradingAccounts      TradingAccount[]
+  watchlists           Watchlist[]
+  achievements         UserAchievement[]
+  challengeEntries     ChallengeParticipant[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  leaderboardSnapshots LeaderboardSnapshot[]
+  passwordTokens       PasswordToken[]
+  priceAlerts          PriceAlert[]
+
+  @@index([createdAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model UserPreference {
+  id                      String @id @default(cuid())
+  userId                  String @unique
+  theme                   String @default("dark")
+  defaultCurrency         String @default("USD")
+  defaultMarket           String @default("CRYPTO")
+  chartPreferences        Json?
+  notificationPreferences Json?
+  privacySettings         Json?
+  user                    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TradingAccount {
+  id                 String              @id @default(cuid())
+  userId             String
+  scope              String              @default("main")
+  dataMode           MarketDataMode      @default(LIVE)
+  accountType        AccountType         @default(SPOT)
+  baseCurrency       String              @default("USD")
+  initialCapital     Decimal             @db.Decimal(38, 18)
+  availableCash      Decimal             @db.Decimal(38, 18)
+  reservedCash       Decimal             @default(0) @db.Decimal(38, 18)
+  realizedPnl        Decimal             @default(0) @db.Decimal(38, 18)
+  feesPaid           Decimal             @default(0) @db.Decimal(38, 18)
+  fundingPaid        Decimal             @default(0) @db.Decimal(38, 18)
+  accountStatus      AccountStatus       @default(ACTIVE)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerTransactions LedgerTransaction[]
+  ledgerEntries      LedgerEntry[]
+  orders             Order[]
+  positions          Position[]
+  snapshots          PortfolioSnapshot[]
+  resets             AccountReset[]
+  fundingEvents      FundingEvent[]
+  liquidationEvents  LiquidationEvent[]
+
+  @@unique([userId, scope])
+  @@index([accountStatus])
+}
+
+model AccountReset {
+  id             String         @id @default(cuid())
+  accountId      String
+  previousEquity Decimal        @db.Decimal(38, 18)
+  newCapital     Decimal        @db.Decimal(38, 18)
+  reason         String?
+  createdAt      DateTime       @default(now())
+  account        TradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+}
+
+model Instrument {
+  id                 String          @id @default(cuid())
+  symbol             String          @unique
+  providerSymbol     String
+  name               String
+  assetClass         AssetClass
+  instrumentType     InstrumentType  @default(SPOT)
+  baseAsset          String
+  quoteAsset         String
+  contractMultiplier Decimal         @default(1) @db.Decimal(38, 18)
+  tickSize           Decimal         @default(0.00000001) @db.Decimal(38, 18)
+  minimumQuantity    Decimal         @default(0.00000001) @db.Decimal(38, 18)
+  maximumLeverage    Decimal         @default(1) @db.Decimal(10, 2)
+  tradingStatus      TradingStatus   @default(ACTIVE)
+  dataProvider       String
+  metadata           Json?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  quote              MarketQuote?
+  candles            MarketCandle[]
+  orders             Order[]
+  positions          Position[]
+  watchlistItems     WatchlistItem[]
+
+  @@index([assetClass, tradingStatus])
+  @@index([dataProvider])
+}
+
+model MarketQuote {
+  id              String         @id @default(cuid())
+  instrumentId    String         @unique
+  bid             Decimal?       @db.Decimal(38, 18)
+  ask             Decimal?       @db.Decimal(38, 18)
+  lastPrice       Decimal?       @db.Decimal(38, 18)
+  markPrice       Decimal?       @db.Decimal(38, 18)
+  volume          Decimal?       @db.Decimal(38, 18)
+  priceChange     Decimal?       @db.Decimal(38, 18)
+  priceChangePct  Decimal?       @db.Decimal(18, 8)
+  mode            MarketDataMode @default(UNAVAILABLE)
+  sourceTimestamp DateTime?
+  receivedAt      DateTime       @updatedAt
+  instrument      Instrument     @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+}
+
+model MarketCandle {
+  id           String     @id @default(cuid())
+  instrumentId String
+  timeframe    String
+  openTime     DateTime
+  closeTime    DateTime
+  open         Decimal    @db.Decimal(38, 18)
+  high         Decimal    @db.Decimal(38, 18)
+  low          Decimal    @db.Decimal(38, 18)
+  close        Decimal    @db.Decimal(38, 18)
+  volume       Decimal    @db.Decimal(38, 18)
+  isComplete   Boolean    @default(true)
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@unique([instrumentId, timeframe, openTime])
+  @@index([instrumentId, timeframe, openTime])
+}
+
+model Order {
+  id               String         @id @default(cuid())
+  accountId        String
+  instrumentId     String
+  clientOrderId    String
+  requestFingerprint String?
+  side             OrderSide
+  orderType        OrderType
+  quantity         Decimal        @db.Decimal(38, 18)
+  filledQuantity   Decimal        @default(0) @db.Decimal(38, 18)
+  limitPrice       Decimal?       @db.Decimal(38, 18)
+  stopPrice        Decimal?       @db.Decimal(38, 18)
+  averageFillPrice Decimal?       @db.Decimal(38, 18)
+  estimatedFee     Decimal?       @db.Decimal(38, 18)
+  feeRate          Decimal        @default(0.001) @db.Decimal(18, 8)
+  reservedAmount   Decimal        @default(0) @db.Decimal(38, 18)
+  status           OrderStatus    @default(DRAFT)
+  timeInForce      TimeInForce    @default(GTC)
+  reduceOnly       Boolean        @default(false)
+  orderGroupId     String?
+  linkedOrderId    String?
+  positionSide     PositionSide   @default(LONG)
+  leverage         Decimal        @default(1) @db.Decimal(10, 2)
+  bracketStop      Decimal?       @db.Decimal(38, 18)
+  bracketTarget    Decimal?       @db.Decimal(38, 18)
+  reservedQuantity Decimal        @default(0) @db.Decimal(38, 18)
+  rejectionReason  String?
+  triggeredAt      DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  account          TradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  instrument       Instrument     @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  executions       Execution[]
+
+  @@unique([accountId, clientOrderId])
+  @@index([accountId, status, createdAt])
+  @@index([instrumentId, status])
+  @@index([orderGroupId])
+}
+
+model Execution {
+  id                 String   @id @default(cuid())
+  orderId            String
+  quantity           Decimal  @db.Decimal(38, 18)
+  executionPrice     Decimal  @db.Decimal(38, 18)
+  fee                Decimal  @db.Decimal(38, 18)
+  feeAsset           String
+  executionTimestamp DateTime @default(now())
+  executionMetadata  Json?
+  realizedPnl        Decimal  @default(0) @db.Decimal(38, 18)
+  order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, executionTimestamp])
+}
+
+model Position {
+  id                String         @id @default(cuid())
+  accountId         String
+  instrumentId      String
+  positionSide      PositionSide   @default(LONG)
+  quantity          Decimal        @db.Decimal(38, 18)
+  averageEntryPrice Decimal        @db.Decimal(38, 18)
+  realizedPnl       Decimal        @default(0) @db.Decimal(38, 18)
+  unrealizedPnl     Decimal        @default(0) @db.Decimal(38, 18)
+  initialMargin     Decimal        @default(0) @db.Decimal(38, 18)
+  maintenanceMargin Decimal        @default(0) @db.Decimal(38, 18)
+  leverage          Decimal        @default(1) @db.Decimal(10, 2)
+  lastFundingAt     DateTime       @default(now())
+  fundingTotal      Decimal        @default(0) @db.Decimal(38, 18)
+  liquidationPrice  Decimal?       @db.Decimal(38, 18)
+  openedAt          DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  account           TradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  instrument        Instrument     @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+
+  @@unique([accountId, instrumentId, positionSide])
+  @@index([accountId, updatedAt])
+}
+
+model LedgerTransaction {
+  id              String                @id @default(cuid())
+  accountId       String
+  transactionType LedgerTransactionType
+  referenceType   String?
+  referenceId     String?
+  description     String
+  createdAt       DateTime              @default(now())
+  account         TradingAccount        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  entries         LedgerEntry[]
+
+  @@index([accountId, createdAt])
+  @@index([referenceType, referenceId])
+}
+
+model LedgerEntry {
+  id            String            @id @default(cuid())
+  transactionId String
+  accountId     String
+  entryType     LedgerEntryType
+  assetCode     String
+  amount        Decimal           @db.Decimal(38, 18)
+  createdAt     DateTime          @default(now())
+  transaction   LedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  account       TradingAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, assetCode, createdAt])
+}
+
+model PortfolioSnapshot {
+  id                String         @id @default(cuid())
+  accountId         String
+  equity            Decimal        @db.Decimal(38, 18)
+  cashBalance       Decimal        @db.Decimal(38, 18)
+  reservedCash      Decimal        @db.Decimal(38, 18)
+  spotValue         Decimal        @db.Decimal(38, 18)
+  realizedPnl       Decimal        @db.Decimal(38, 18)
+  unrealizedPnl     Decimal        @db.Decimal(38, 18)
+  snapshotTimestamp DateTime       @default(now())
+  account           TradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, snapshotTimestamp])
+}
+
+model Watchlist {
+  id        String          @id @default(cuid())
+  userId    String
+  name      String
+  isDefault Boolean @default(false)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     WatchlistItem[]
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
+}
+
+model WatchlistItem {
+  id           String     @id @default(cuid())
+  watchlistId  String
+  instrumentId String
+  sortOrder    Int        @default(0)
+  watchlist    Watchlist  @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistId, instrumentId])
+  @@index([watchlistId, sortOrder])
+}
+
+model Achievement {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  description String
+  criteria    Json
+  createdAt   DateTime          @default(now())
+  users       UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  achievementId String
+  unlockedAt    DateTime    @default(now())
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId, unlockedAt])
+}
+
+model Challenge {
+  id              String                 @id @default(cuid())
+  name            String
+  description     String
+  startingCapital Decimal                @db.Decimal(38, 18)
+  startTime       DateTime
+  endTime         DateTime
+  configuration   Json
+  status          String                 @default("DRAFT")
+  createdAt       DateTime               @default(now())
+  participants    ChallengeParticipant[]
+
+  @@index([status, startTime, endTime])
+}
+
+model ChallengeParticipant {
+  id             String    @id @default(cuid())
+  challengeId    String
+  userId         String
+  startingEquity Decimal   @db.Decimal(38, 18)
+  finalEquity    Decimal?  @db.Decimal(38, 18)
+  performance    Decimal?  @db.Decimal(18, 8)
+  finalizedAt    DateTime?
+  valuationAt    DateTime?
+  finalizationError String?
+  joinedAt       DateTime  @default(now())
+  challenge      Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([challengeId, userId])
+  @@index([challengeId, performance])
+}
+
+model LeaderboardSnapshot {
+  id                String   @id @default(cuid())
+  leaderboardType   String
+  periodKey         String
+  userId            String
+  rank              Int
+  returnPercentage  Decimal  @db.Decimal(18, 8)
+  realizedPnl       Decimal  @db.Decimal(38, 18)
+  tradeCount        Int      @default(0)
+  winRate           Decimal? @db.Decimal(18, 8)
+  snapshotTimestamp DateTime @default(now())
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([leaderboardType, periodKey, userId])
+  @@index([leaderboardType, periodKey, rank])
+}
+
+model Notification {
+  id               String           @id @default(cuid())
+  userId           String
+  notificationType NotificationType
+  title            String
+  message          String
+  metadata         Json?
+  readAt           DateTime?
+  createdAt        DateTime         @default(now())
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model PasswordToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  kind      String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model AppConfig {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model WorkerLease {
+  name          String   @id
+  owner         String
+  expiresAt     DateTime
+  heartbeatAt   DateTime
+  lastSuccessAt DateTime?
+}
+
+model PriceAlert {
+  id        String   @id @default(cuid())
+  userId    String
+  symbol    String
+  direction String
+  target    Decimal  @db.Decimal(38, 18)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([active, symbol])
+}
+
+model FundingEvent {
+  id          String         @id @default(cuid())
+  accountId   String
+  positionId  String
+  intervalKey String
+  rate        Decimal        @db.Decimal(18, 8)
+  amount      Decimal        @db.Decimal(38, 18)
+  createdAt   DateTime       @default(now())
+  account     TradingAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([positionId, intervalKey])
+  @@index([accountId, createdAt])
+}
+
+model LiquidationEvent {
+  id         String         @id @default(cuid())
+  accountId  String
+  positionId String
+  symbol     String
+  price      Decimal        @db.Decimal(38, 18)
+  loss       Decimal        @db.Decimal(38, 18)
+  fee        Decimal        @db.Decimal(38, 18)
+  createdAt  DateTime       @default(now())
+  account    TradingAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+}
