@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { test, expect, request as playwrightRequest } from "@playwright/test";
+import { request as playwrightRequest } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { db } from "@/lib/db";
 import { market, quote } from "../fixtures";
 import { reconcile } from "@/server/trading/ledger";
@@ -31,6 +32,30 @@ test("production API: sessions, orders, isolation, validation and privacy", asyn
   expect(limitResponse.status()).toBe(201);
   const limit = (await limitResponse.json()).data.order;
   expect(limit.reservedAmount).toBe("180.18");
+  const detailResponse = await request.get(`/api/orders/${orders[0].id}`);
+  expect(detailResponse.status()).toBe(200);
+  expect((await detailResponse.json()).data.order.events.map((event: { eventType: string }) => event.eventType)).toEqual(["CREATED", "FILLED"]);
+  expect((await request.get("/api/portfolio/analytics?period=all")).status()).toBe(200);
+  const journalResponse = await request.post("/api/journal", { headers: { Origin: origin }, data: { scope: "main", orderId: orders[0].id, notes: "Tested the entry and recorded the reason.", tags: ["api", "discipline"], emotionalState: "FOCUSED", outcome: "OPEN" } });
+  expect(journalResponse.status(), await journalResponse.text()).toBe(201);
+  const journalId = (await journalResponse.json()).data.entry.id;
+  expect((await request.get("/api/journal")).status()).toBe(200);
+  expect((await request.patch(`/api/journal/${journalId}`, { headers: { Origin: origin }, data: { notes: "Updated execution notes.", outcome: "WIN" } })).status()).toBe(200);
+  expect((await request.delete(`/api/journal/${journalId}`, { headers: { Origin: origin } })).status()).toBe(200);
+  const preferences = await request.patch("/api/user/preferences", { headers: { Origin: origin }, data: { notificationPreferences: { orderFilled: false, priceAlert: true } } });
+  expect(preferences.status()).toBe(200);
+  expect((await (await request.get("/api/user/preferences")).json()).data.preferences.notificationPreferences.orderFilled).toBe(false);
+  const watchlists = await request.get("/api/watchlists");
+  expect(watchlists.status()).toBe(200);
+  const createdWatchlist = await request.post("/api/watchlists", { headers: { Origin: origin }, data: { name: `API list ${suffix}` } });
+  expect(createdWatchlist.status()).toBe(201);
+  const watchlistId = (await createdWatchlist.json()).data.watchlist.id;
+  const watchItem = await request.post(`/api/watchlists/${watchlistId}/items`, { headers: { Origin: origin }, data: { symbol: instrument.symbol } });
+  expect(watchItem.status()).toBe(201);
+  const itemId = (await watchItem.json()).data.item.id;
+  expect((await request.patch(`/api/watchlists/${watchlistId}`, { headers: { Origin: origin }, data: { name: `Renamed ${suffix}`, itemOrder: [{ id: itemId, sortOrder: 0 }], isDefault: false } })).status()).toBe(200);
+  expect((await request.delete(`/api/watchlists/${watchlistId}/items?itemId=${itemId}`, { headers: { Origin: origin } })).status()).toBe(200);
+  expect((await request.delete(`/api/watchlists/${watchlistId}`, { headers: { Origin: origin } })).status()).toBe(200);
   expect((await request.delete(`/api/orders/${limit.id}`, { headers: { Origin: origin } })).status()).toBe(200);
   expect((await request.delete(`/api/orders/${limit.id}`, { headers: { Origin: origin } })).status()).toBe(200);
 
@@ -52,6 +77,14 @@ test("production API: sessions, orders, isolation, validation and privacy", asyn
   expect((await request.post("/api/auth/logout", { headers: { Origin: origin } })).status()).toBe(200);
   expect((await request.get("/api/auth/me")).status()).toBe(401);
   expect((await request.post("/api/auth/login", { data: { email: credentials.email, password: credentials.password } })).status()).toBe(200);
+  const sessions = await request.get("/api/auth/sessions");
+  expect(sessions.status()).toBe(200);
+  expect((await sessions.json()).data.sessions.some((session: { current: boolean }) => session.current)).toBe(true);
+  const alert = await request.post("/api/alerts", { headers: { Origin: origin }, data: { symbol: instrument.symbol, direction: "ABOVE", target: "1" } });
+  expect(alert.status()).toBe(201);
+  const alertId = (await alert.json()).data.alert.id;
+  expect((await request.get("/api/alerts")).status()).toBe(200);
+  expect((await request.delete(`/api/alerts/${alertId}`, { headers: { Origin: origin } })).status()).toBe(200);
   await quote(instrument.id, "120", "121");
   const sold = await request.post("/api/orders", { data: { ...input, side: "SELL", clientOrderId: randomUUID() } });
   expect(sold.status()).toBe(201);
@@ -74,4 +107,16 @@ test("production proxy rejects large chunked bodies without corrupting normal JS
     req.end('"}');
   });
   expect(status).toBe(413);
+});
+
+test("account security controls change password and revoke sessions", async ({ request }) => {
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
+  const credentials = { username: `pw_${suffix}`, email: `${suffix}@example.test`, password: "old-browser-password", initialCapital: 10000 };
+  expect((await request.post("/api/auth/register", { data: credentials })).status()).toBe(201);
+  const sessions = await request.get("/api/auth/sessions");
+  expect(sessions.status()).toBe(200);
+  expect((await request.post("/api/auth/password", { headers: { Origin: origin }, data: { currentPassword: credentials.password, newPassword: "new-browser-password", confirmation: "new-browser-password" } })).status()).toBe(200);
+  expect((await request.get("/api/auth/me")).status()).toBe(200);
+  expect((await request.post("/api/auth/login", { data: { email: credentials.email, password: credentials.password } })).status()).toBe(401);
+  expect((await request.post("/api/auth/login", { data: { email: credentials.email, password: "new-browser-password" } })).status()).toBe(200);
 });

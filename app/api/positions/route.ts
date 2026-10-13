@@ -1,4 +1,4 @@
-import { apiError, apiSuccess } from "@/lib/http";
+import { apiError, apiException, apiSuccess } from "@/lib/http";
 import { requireApiUser } from "@/server/auth/session";
 import { getPortfolio } from "@/server/trading/service";
 import { NextRequest } from "next/server";
@@ -11,7 +11,8 @@ export async function GET(request: NextRequest) {
   try {
     const portfolio = await getPortfolio(user.id, scope);
     return apiSuccess({ positions: portfolio.positions });
-  } catch {
-    return apiError("Trading account unavailable.", 404, "ACCOUNT_NOT_FOUND");
+  } catch (error) {
+    if (error instanceof Error && error.message === "Trading account unavailable.") return apiError(error.message, 404, "ACCOUNT_NOT_FOUND");
+    return apiException(error, "Positions unavailable.", 503, "POSITIONS_UNAVAILABLE");
   }
 }

@@ -1,4 +1,5 @@
-export function formatCurrency(value: number | string, maximumFractionDigits = 2) {
+export function formatCurrency(value: number | string | null | undefined, maximumFractionDigits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -7,14 +8,16 @@ export function formatCurrency(value: number | string, maximumFractionDigits = 2
   }).format(Number(value));
 }
 
-export function formatNumber(value: number | string, maximumFractionDigits = 4) {
+export function formatNumber(value: number | string | null | undefined, maximumFractionDigits = 4) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 0,
     maximumFractionDigits,
   }).format(Number(value));
 }
 
-export function formatPercent(value: number | string, maximumFractionDigits = 2) {
+export function formatPercent(value: number | string | null | undefined, maximumFractionDigits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
   return `${Number(value) >= 0 ? "+" : ""}${Number(value).toFixed(maximumFractionDigits)}%`;
 }
 

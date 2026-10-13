@@ -19,7 +19,7 @@ export async function market(derivative = false, bid = "100", ask = "101") {
 }
 
 export async function quote(instrumentId: string, bid = "100", ask = "101", sourceTimestamp = new Date()) {
-  return db.marketQuote.upsert({ where: { instrumentId }, create: { instrumentId, bid, ask, lastPrice: bid, markPrice: bid, mode: "LIVE", sourceTimestamp }, update: { bid, ask, lastPrice: bid, markPrice: bid, mode: "LIVE", sourceTimestamp } });
+  return db.marketQuote.upsert({ where: { instrumentId }, create: { instrumentId, bid, ask, lastPrice: bid, markPrice: bid, mode: "LIVE", sourceTimestamp }, update: { bid, ask, lastPrice: bid, markPrice: bid, mode: "LIVE", sourceTimestamp, receivedAt: new Date() } });
 }
 
 export const clientOrderId = () => randomUUID();

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 test("landing page, registration, and authenticated workspace", async ({ page }) => {
   const errors: string[] = [];
@@ -20,7 +20,7 @@ test("landing page, registration, and authenticated workspace", async ({ page })
   await expect(registrationResponse.status()).toBe(201);
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
   await expect(page.getByRole("heading", { name: /your command center/i })).toBeVisible();
-  await page.getByRole("link", { name: /terminal live/i }).click();
+  await page.locator("#mobile-navigation").getByRole("link", { name: "Terminal", exact: true }).click();
   await expect(page).toHaveURL(/\/terminal$/);
   await expect(page.getByText("Trading terminal")).toBeVisible();
   await page.goto("/settings");
@@ -44,4 +44,38 @@ test("login recovers from a failed network request", async ({ page }) => {
   await page.getByRole("button", { name: "Enter terminal" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Connection interrupted" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Enter terminal" })).toBeEnabled();
+});
+
+test("valid login persists across navigation, reload, logout, and re-login", async ({ page, request }) => {
+  const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  const credentials = { username: `login_${suffix}`.slice(0, 24), email: `login_${suffix}@example.com`, password: "browser-login-password", initialCapital: 10000 };
+  const registered = await request.post("/api/auth/register", { data: credentials });
+  expect(registered.status(), await registered.text()).toBe(201);
+
+  await page.goto("/login");
+  await page.getByLabel("Email address", { exact: true }).fill(credentials.email);
+  await page.getByLabel("Password", { exact: true }).fill(credentials.password);
+  const [loginResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/api/auth/login") && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Enter terminal" }).click(),
+  ]);
+  expect(loginResponse.status()).toBe(200);
+  await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: /your command center/i })).toBeVisible();
+
+  await page.goto("/portfolio");
+  await expect(page.getByRole("heading", { name: "Portfolio" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Portfolio" })).toBeVisible();
+
+  await page.goto("/login");
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
+
+  await page.goto("/login");
+  await page.getByLabel("Email address", { exact: true }).fill(credentials.email);
+  await page.getByLabel("Password", { exact: true }).fill(credentials.password);
+  await page.getByRole("button", { name: "Enter terminal" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
 });

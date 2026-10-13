@@ -37,16 +37,17 @@ export async function createSession(userId: string, expectedPasswordHash?: strin
 export async function destroySession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (token) await db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
-  cookieStore.delete(SESSION_COOKIE);
+  try {
+    if (token) await db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
+  } finally {
+    cookieStore.set(SESSION_COOKIE, "", {
+      httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+      path: "/", expires: new Date(0), maxAge: 0,
+    });
+  }
 }
 
-export async function purgeExpiredSessions(now = new Date()) {
-  const result = await db.session.deleteMany({ where: { expiresAt: { lte: now } } });
-  return result.count;
-}
-
-export async function getCurrentUser() {
+export async function getCurrentSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
@@ -62,17 +63,26 @@ export async function getCurrentUser() {
       },
     },
   });
-
   if (!session) return null;
   if (session.expiresAt <= new Date()) {
     await db.session.deleteMany({ where: { id: session.id } });
     return null;
   }
   if (session.user.accountStatus !== "ACTIVE") {
-    await db.session.delete({ where: { id: session.id } }).catch(() => undefined);
+    await db.session.deleteMany({ where: { id: session.id } }).catch(() => undefined);
     return null;
   }
-  return session.user;
+  return session;
+}
+
+export async function purgeExpiredSessions(now = new Date()) {
+  const result = await db.session.deleteMany({ where: { expiresAt: { lte: now } } });
+  return result.count;
+}
+
+export async function getCurrentUser() {
+  const session = await getCurrentSession();
+  return session?.user ?? null;
 }
 
 export async function requireUser() {

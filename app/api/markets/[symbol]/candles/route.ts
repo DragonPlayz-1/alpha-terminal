@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { apiError, apiSuccess, getErrorMessage } from "@/lib/http";
+import { apiError, apiException, apiSuccess } from "@/lib/http";
 import { getCandles } from "@/server/market-data/service";
 import { z } from "zod";
 
@@ -18,6 +18,6 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sym
     const candles = await getCandles(symbol, timeframe, limit);
     return apiSuccess({ symbol, timeframe, candles });
   } catch (error) {
-    return apiError(getErrorMessage(error), 404, "CANDLE_DATA_ERROR");
+    return apiException(error, "Candle data is temporarily unavailable.", 503, "CANDLE_DATA_UNAVAILABLE");
   }
 }

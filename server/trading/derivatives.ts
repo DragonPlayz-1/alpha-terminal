@@ -7,6 +7,7 @@ import { settle, releaseOrder } from "./settlement";
 import { postLedger } from "./ledger";
 import { isFresh } from "@/server/market-data/service";
 import { getTradingConfig } from "@/server/config";
+import { recordOrderEvent } from "./order-events";
 
 export async function processDerivatives(now = new Date()) {
   const positions = await db.position.findMany({ where: { instrument: { instrumentType: "PERPETUAL" } }, select: { id: true, accountId: true } });
@@ -34,6 +35,7 @@ export async function processDerivatives(now = new Date()) {
     const exits = await tx.order.findMany({ where: { accountId: candidate.accountId, instrumentId: position.instrumentId, positionSide: position.positionSide, status: "OPEN", reduceOnly: true } });
     for (const exit of exits) await releaseOrder(tx, exit, "CANCELLED", "Liquidation");
     const order = await tx.order.create({ data: { accountId: candidate.accountId, instrumentId: position.instrumentId, clientOrderId: `liquidation:${randomUUID()}`, side: position.positionSide === "LONG" ? "SELL" : "BUY", positionSide: position.positionSide, reduceOnly: true, orderType: "MARKET", quantity: position.quantity, status: "PENDING", feeRate: fixed(LIQUIDATION_FEE), leverage: position.leverage } });
+    await recordOrderEvent(tx, order.id, "CREATED", "Liquidation order created at the isolated margin threshold.", "PENDING");
     const price = D(order.side === "BUY" ? quote.ask : quote.bid);
     await settle(tx, order, position.account, position.instrument, quote, true);
     await tx.liquidationEvent.create({ data: { accountId: candidate.accountId, positionId: position.id, symbol: position.instrument.symbol, price: fixed(price), loss: fixed(Decimal.max(0, pnl.neg())), fee: fixed(price.mul(position.quantity).mul(LIQUIDATION_FEE)) } });

@@ -6,11 +6,16 @@ import { postLedger } from "./ledger";
 import { evaluateAchievements } from "@/server/competition/achievements";
 import type { Tx } from "./transaction";
 import { snapshotInTransaction } from "./valuation";
+import { recordOrderEvent } from "./order-events";
+import { createNotification } from "@/server/notifications";
 
 export async function releaseOrder(tx: Tx, order: Order, status: "CANCELLED" | "EXPIRED" | "REJECTED", reason?: string) {
   if (!["OPEN", "PENDING", "PARTIALLY_FILLED"].includes(order.status)) return;
   if (D(order.reservedAmount).gt(0)) await tx.tradingAccount.update({ where: { id: order.accountId }, data: { availableCash: { increment: order.reservedAmount }, reservedCash: { decrement: order.reservedAmount } } });
   await tx.order.update({ where: { id: order.id }, data: { status, reservedAmount: 0, reservedQuantity: 0, rejectionReason: reason } });
+  await recordOrderEvent(tx, order.id, status, reason ? `${status} — ${reason}` : `Order ${status.toLowerCase()}.`, status, { reason: reason ?? null, releasedCash: order.reservedAmount.toString(), releasedQuantity: order.reservedQuantity.toString() });
+  const accountOwner = await tx.tradingAccount.findUnique({ where: { id: order.accountId }, select: { userId: true } });
+  if (accountOwner) await createNotification(tx, { user: { connect: { id: accountOwner.userId } }, notificationType: status === "REJECTED" ? "ORDER_REJECTED" : "ORDER_CANCELLED", title: status === "REJECTED" ? "Order rejected" : "Order closed", message: reason ? `Order ${status.toLowerCase()}: ${reason}` : `Order ${status.toLowerCase()}.` });
 }
 
 export async function settle(tx: Tx, order: Order, account: TradingAccount, instrument: Instrument, quote: MarketQuote, liquidating = false) {
@@ -63,7 +68,7 @@ export async function settle(tx: Tx, order: Order, account: TradingAccount, inst
     if (nextQuantity.eq(0)) await tx.position.delete({ where: { id: position.id } });
     else await tx.position.update({ where: { id: position.id }, data: { quantity: fixed(nextQuantity), initialMargin: { decrement: fixed(releasedMargin) }, realizedPnl: { increment: fixed(pnl) } } });
     // Cancel OCO sibling atomically; resize other protected exits after an independent partial close.
-    const exits = await tx.order.findMany({ where: { accountId: account.id, instrumentId: instrument.id, positionSide: order.positionSide, status: "OPEN", reservedQuantity: { gt: 0 }, id: { not: order.id } }, orderBy: { createdAt: "asc" } });
+    const exits = await tx.order.findMany({ where: { accountId: account.id, instrumentId: instrument.id, positionSide: order.positionSide, status: { in: ["OPEN", "PARTIALLY_FILLED", "PENDING"] }, reservedQuantity: { gt: 0 }, id: { not: order.id } }, orderBy: { createdAt: "asc" } });
     let remaining = nextQuantity;
     const groups = new Map<string, Decimal>();
     for (const exit of exits) {
@@ -72,7 +77,10 @@ export async function settle(tx: Tx, order: Order, account: TradingAccount, inst
       let size = groups.get(group);
       if (!size) { size = Decimal.min(remaining, D(exit.quantity).minus(exit.filledQuantity)); groups.set(group, size); remaining = remaining.minus(size); }
       if (size.eq(0)) await releaseOrder(tx, exit, "CANCELLED", "Position closed");
-      else if (size.lt(D(exit.quantity).minus(exit.filledQuantity))) await tx.order.update({ where: { id: exit.id }, data: { quantity: fixed(size.plus(exit.filledQuantity)), reservedQuantity: fixed(size) } });
+      else if (size.lt(D(exit.quantity).minus(exit.filledQuantity))) {
+        await tx.order.update({ where: { id: exit.id }, data: { quantity: fixed(size.plus(exit.filledQuantity)), reservedQuantity: fixed(size) } });
+        await recordOrderEvent(tx, exit.id, "RESIZED", "Exit resized after another order closed inventory.", exit.status, { previousQuantity: exit.quantity.toString(), quantity: fixed(size.plus(exit.filledQuantity)), reservedQuantity: fixed(size) });
+      }
     }
   }
   await tx.tradingAccount.update({ where: { id: account.id }, data: {
@@ -88,13 +96,15 @@ export async function settle(tx: Tx, order: Order, account: TradingAccount, inst
   await tx.execution.create({ data: { orderId: order.id, quantity: fixed(quantity), executionPrice: fixed(price), fee: fixed(fee), feeAsset: "USD", realizedPnl: fixed(pnl.plus(protection)), executionMetadata: { model: "top-of-book full fill; no depth simulation", provider: instrument.dataProvider, quoteTimestamp: quote.sourceTimestamp?.toISOString() ?? "", isolatedGapProtection: protection.toString(), liquidation: liquidating } } });
   const averageFill = D(order.filledQuantity).gt(0) ? averageCost(D(order.filledQuantity), D(order.averageFillPrice ?? price), quantity, price) : price;
   const filled = await tx.order.update({ where: { id: order.id }, data: { status: "FILLED", filledQuantity: order.quantity, averageFillPrice: fixed(averageFill), estimatedFee: fixed(fee), reservedAmount: 0, reservedQuantity: 0 } });
+  await recordOrderEvent(tx, order.id, "FILLED", `${liquidating ? "Liquidation" : "Execution"} filled ${fixed(quantity)} ${instrument.symbol}.`, "FILLED", { quantity: fixed(quantity).toString(), executionPrice: fixed(price).toString(), fee: fixed(fee).toString(), realizedPnl: fixed(pnl.plus(protection)).toString() });
   await evaluateAchievements(tx, account.userId, account.id);
-  await tx.notification.create({ data: { userId: account.userId, notificationType: liquidating ? "LIQUIDATION" : "ORDER_FILLED", title: liquidating ? "Position liquidated" : `${order.side === "BUY" ? "Bought" : "Sold"} ${instrument.baseAsset}`, message: `${fixed(quantity)} ${instrument.symbol} filled at $${price.toFixed(2)}. Fee $${fee.toFixed(4)}.` } });
+  await createNotification(tx, { user: { connect: { id: account.userId } }, notificationType: liquidating ? "LIQUIDATION" : "ORDER_FILLED", title: liquidating ? "Position liquidated" : `${order.side === "BUY" ? "Bought" : "Sold"} ${instrument.baseAsset}`, message: `${fixed(quantity)} ${instrument.symbol} filled at $${price.toFixed(2)}. Fee $${fee.toFixed(4)}.` });
   if (!closing && (order.bracketStop || order.bracketTarget)) {
     const group = randomUUID();
     for (const [type, trigger] of [["STOP_MARKET", order.bracketStop], ["TAKE_PROFIT_LIMIT", order.bracketTarget]] as const) {
       if (!trigger) continue;
-      await tx.order.create({ data: { accountId: account.id, instrumentId: instrument.id, clientOrderId: `${order.id}:${type}`, side: order.side === "BUY" ? "SELL" : "BUY", positionSide: order.positionSide, orderType: type, quantity: fixed(quantity), stopPrice: trigger, limitPrice: type === "TAKE_PROFIT_LIMIT" ? trigger : null, reduceOnly: true, reservedQuantity: fixed(quantity), orderGroupId: group, linkedOrderId: order.id, leverage: order.leverage, status: "OPEN", feeRate: order.feeRate, estimatedFee: fixed(D(trigger).mul(quantity).mul(rate)) } });
+      const child = await tx.order.create({ data: { accountId: account.id, instrumentId: instrument.id, clientOrderId: `${order.id}:${type}`, side: order.side === "BUY" ? "SELL" : "BUY", positionSide: order.positionSide, orderType: type, quantity: fixed(quantity), stopPrice: trigger, limitPrice: type === "TAKE_PROFIT_LIMIT" ? trigger : null, reduceOnly: true, reservedQuantity: fixed(quantity), orderGroupId: group, linkedOrderId: order.id, leverage: order.leverage, status: "OPEN", feeRate: order.feeRate, estimatedFee: fixed(D(trigger).mul(quantity).mul(rate)) } });
+      await recordOrderEvent(tx, child.id, "CREATED", `Bracket ${type.toLowerCase()} created from the filled entry.`, "OPEN", { linkedOrderId: order.id, trigger: trigger.toString() });
     }
   }
   if (account.scope !== "main" && !(await snapshotInTransaction(account.id, tx, true))) throw new Error("Challenge deadline reached before settlement.");

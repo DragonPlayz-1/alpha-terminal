@@ -27,7 +27,7 @@ const testEnv = {
   DATABASE_URL: databaseUrl,
   TEST_SCHEMA: schema,
   NODE_ENV: "test",
-  APP_URL: "http://127.0.0.1:3100",
+  APP_URL: undefined,
   NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3100",
   SESSION_SECRET: randomUUID() + randomUUID(),
   TRUSTED_ORIGINS: "",
@@ -39,6 +39,7 @@ const testEnv = {
 };
 let child;
 let runtime;
+let runtimeParent;
 let interrupted = false;
 function stop(signal) {
   interrupted = true;
@@ -68,9 +69,12 @@ try {
   if (mode === "unit") {
     await run(process.execPath, ["node_modules/vitest/vitest.mjs", "run", ...process.argv.slice(3)]);
   } else {
-    if (process.env.E2E_SKIP_BUILD !== "1") await run("npm", ["run", "build"], { ...testEnv, NODE_ENV: "production" });
+    // Deliberately build for a different origin. The copied artifact must use
+    // runtime NEXT_PUBLIC_APP_URL when APP_URL is not set (login regression).
+    if (process.env.E2E_SKIP_BUILD !== "1") await run("npm", ["run", "build"], { ...testEnv, NODE_ENV: "production", NEXT_PUBLIC_APP_URL: "https://build-only.example.test" });
     if (readdirSync(".next/standalone").some(name => name === ".env" || name.startsWith(".env."))) throw new Error("Standalone output contains a dotenv file.");
-    runtime = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "alpha-runtime-"));
+    runtimeParent = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "alpha-runtime-parent-"));
+    runtime = join(runtimeParent, "standalone");
     cpSync(".next/standalone", runtime, { recursive: true });
     console.log("Verifying a copied standalone artifact outside the project directory.");
     await run(process.execPath, ["node_modules/@playwright/test/cli.js", "test", ...process.argv.slice(3)], { ...testEnv, STANDALONE_DIR: runtime });
@@ -82,5 +86,6 @@ try {
   // Only the unpredictable schema created by THIS invocation is eligible.
   await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => { console.error(`Could not remove test schema ${schema}`); process.exitCode = 1; });
   await admin.$disconnect();
-  if (runtime) rmSync(runtime, { recursive: true, force: true });
+  if (runtimeParent) rmSync(runtimeParent, { recursive: true, force: true });
+  else if (runtime) rmSync(runtime, { recursive: true, force: true });
 }

@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { createNotification } from "@/server/notifications";
 
 type Tx = Prisma.TransactionClient;
 export async function evaluateAchievements(tx: Tx, userId: string, accountId: string) {
@@ -23,7 +24,7 @@ export async function evaluateAchievements(tx: Tx, userId: string, accountId: st
     if (existing) continue;
     const item = await tx.userAchievement.createMany({ data: [{ userId, achievementId: achievement.id }], skipDuplicates: true });
     if (!item.count) continue;
-    await tx.notification.create({ data: { userId, notificationType: "ACHIEVEMENT", title: `Achievement unlocked: ${achievement.name}`, message: achievement.description, metadata: { achievementId: achievement.id } } });
+    await createNotification(tx, { user: { connect: { id: userId } }, notificationType: "ACHIEVEMENT", title: `Achievement unlocked: ${achievement.name}`, message: achievement.description, metadata: { achievementId: achievement.id } });
     unlocked.push(item);
   }
   return unlocked;

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { db } from "@/lib/db";
 
 test.afterAll(() => db.$disconnect());

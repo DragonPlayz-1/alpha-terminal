@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { apiError, apiSuccess, isUniqueConstraintError } from "@/lib/http";
+import { apiError, apiException, apiSuccess, isUniqueConstraintError } from "@/lib/http";
 import { requireApiUser } from "@/server/auth/session";
 
 const schema = z.object({
@@ -12,26 +12,28 @@ const schema = z.object({
 }).strict();
 
 export async function GET() {
-  const user = await requireApiUser();
-  if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
-  return apiSuccess({ user: { id: user.id, username: user.username, email: user.email, avatarUrl: user.avatarUrl, publicProfile: user.publicProfile, publicHistory: user.publicHistory, createdAt: user.createdAt } });
+  try {
+    const user = await requireApiUser();
+    if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
+    return apiSuccess({ user: { id: user.id, username: user.username, email: user.email, avatarUrl: user.avatarUrl, publicProfile: user.publicProfile, publicHistory: user.publicHistory, emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null, createdAt: user.createdAt } });
+  } catch (error) { return apiException(error, "Unable to load your profile.", 503, "PROFILE_UNAVAILABLE"); }
 }
 
 export async function PATCH(request: NextRequest) {
-  const user = await requireApiUser();
-  if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
-  const parsed = schema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return apiError("Invalid profile details.");
-  const data = { ...parsed.data, ...(parsed.data.username ? { username: parsed.data.username.toLowerCase() } : {}) };
-  if (data.username && data.username !== user.username) {
-    const taken = await db.user.findUnique({ where: { username: data.username }, select: { id: true } });
-    if (taken) return apiError("That username is already in use.", 409, "USERNAME_TAKEN");
-  }
   try {
+    const user = await requireApiUser();
+    if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
+    const parsed = schema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return apiError("Invalid profile details.");
+    const data = { ...parsed.data, ...(parsed.data.username ? { username: parsed.data.username.toLowerCase() } : {}) };
+    if (data.username && data.username !== user.username) {
+      const taken = await db.user.findUnique({ where: { username: data.username }, select: { id: true } });
+      if (taken) return apiError("That username is already in use.", 409, "USERNAME_TAKEN");
+    }
     const updated = await db.user.update({ where: { id: user.id }, data });
-    return apiSuccess({ user: { id: updated.id, username: updated.username, email: updated.email, avatarUrl: updated.avatarUrl, publicProfile: updated.publicProfile, publicHistory: updated.publicHistory } });
+    return apiSuccess({ user: { id: updated.id, username: updated.username, email: updated.email, avatarUrl: updated.avatarUrl, publicProfile: updated.publicProfile, publicHistory: updated.publicHistory, emailVerifiedAt: updated.emailVerifiedAt?.toISOString() ?? null } });
   } catch (error) {
     if (isUniqueConstraintError(error)) return apiError("That username is already in use.", 409, "USERNAME_TAKEN");
-    throw error;
+    return apiException(error, "Unable to save your profile.", 503, "PROFILE_UPDATE_UNAVAILABLE");
   }
 }
