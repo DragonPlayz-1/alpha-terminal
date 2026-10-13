@@ -14,9 +14,9 @@ Thank you for helping improve ALPHA TERMINAL. Contributions should preserve the 
 
 ```bash
 npm ci
-cp .env.example .env
+test -f .env || cp .env.example .env
 # Set a private local PostgreSQL DATABASE_URL and SESSION_SECRET.
-npx prisma migrate dev
+npm run db:deploy
 npm run db:seed
 ```
 
@@ -34,13 +34,16 @@ Run the same checks used by CI before submitting:
 ```bash
 npm run typecheck
 npm run lint
+npm run docs:check
 npm test
-npm run build
+npx playwright install --with-deps chromium
 npm run test:e2e
-npm audit
+npm audit --audit-level=high
 ```
 
 The test runner creates an isolated PostgreSQL schema per invocation. Do not bypass `npm test` or `npm run test:e2e` with a database URL that points at a shared environment.
+
+The E2E command includes a production build. See the [development guide](docs/development.md) for focused tests, browser traces, and screenshot capture. Setup instructions and the complete environment reference are in the [README](README.md) and [configuration guide](docs/configuration.md).
 
 ## Domain guidelines
 
@@ -74,6 +77,10 @@ feat: add challenge finalization review state
 fix: reject stale quotes before market execution
 docs: expand production operations guide
 ```
+
+In the commit body, explain why the change is needed, important implementation decisions, and how it was verified. Keep related source, migrations, and regression coverage together when they depend on one another. Avoid vague messages such as “update files” or “fix everything.”
+
+Main is protected by quality/build, production Chromium, and CodeQL checks. Open a pull request and allow those checks to complete before merging. Use synthetic data for public UI screenshots and preserve the source provenance described in the [product tour](docs/product-tour.md).
 
 ## Review philosophy
 

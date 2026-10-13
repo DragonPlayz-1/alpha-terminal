@@ -41,6 +41,13 @@ body:
     attributes:
       label: Commit or version
   - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js, npm, PostgreSQL, OS/browser, deployment method, and whether the worker is running.
+    validations:
+      required: true
+  - type: textarea
     id: logs
     attributes:
       label: Relevant logs

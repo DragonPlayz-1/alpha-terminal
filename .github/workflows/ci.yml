@@ -53,6 +53,8 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
+      - name: Validate documentation and product gallery
+        run: npm run docs:check
       - name: Test
         run: npm test
       - name: Build standalone artifact
