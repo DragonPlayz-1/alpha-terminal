@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and setup help
+    url: https://github.com/DragonPlayz-1/alpha-terminal/discussions
+    about: Ask questions and discuss the simulator with the community.
+  - name: Report a security vulnerability privately
+    url: https://github.com/DragonPlayz-1/alpha-terminal/security/advisories/new
+    about: Please keep vulnerabilities, credentials, and exploit details out of public issues.

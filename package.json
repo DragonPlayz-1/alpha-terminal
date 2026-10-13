@@ -1,7 +1,13 @@
 {
   "name": "alpha-terminal",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "An open-source paper-trading workspace with interactive charts, authoritative order previews, portfolio analytics, and a trade journal.",
   "private": true,
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/DragonPlayz-1/alpha-terminal.git" },
+  "bugs": { "url": "https://github.com/DragonPlayz-1/alpha-terminal/issues" },
+  "homepage": "https://github.com/DragonPlayz-1/alpha-terminal#readme",
+  "engines": { "node": "22.x || 24.x", "npm": ">=10" },
   "scripts": {
     "dev": "next dev",
     "dev:worker": "tsx worker/market-worker.ts",
@@ -10,6 +16,7 @@
     "prepare:standalone": "node scripts/prepare-standalone.mjs",
     "screenshots": "node --import tsx scripts/capture-screenshots.ts",
     "lint": "eslint .",
+    "docs:check": "node scripts/check-docs.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs unit",
     "test:e2e": "node scripts/test.mjs e2e",
