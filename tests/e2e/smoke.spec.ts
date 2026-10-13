@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test, expect } from "./fixtures";
 
 test("landing page, registration, and authenticated workspace", async ({ page }) => {
@@ -9,7 +10,7 @@ test("landing page, registration, and authenticated workspace", async ({ page })
   await expect(page.getByRole("heading", { name: /make sharper/i })).toBeVisible();
   await page.getByRole("link", { name: /open terminal/i }).first().click();
   await expect(page).toHaveURL(/\/register$/);
-  const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
   await page.getByPlaceholder("market_maven").fill(`e2e_${suffix}`);
   await page.getByPlaceholder("you@example.com").fill(`e2e_${suffix}@example.com`);
   await page.getByLabel("Create password", { exact: true }).fill("browser-test-password");
@@ -47,7 +48,7 @@ test("login recovers from a failed network request", async ({ page }) => {
 });
 
 test("valid login persists across navigation, reload, logout, and re-login", async ({ page, request }) => {
-  const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
   const credentials = { username: `login_${suffix}`.slice(0, 24), email: `login_${suffix}@example.com`, password: "browser-login-password", initialCapital: 10000 };
   const registered = await request.post("/api/auth/register", { data: credentials });
   expect(registered.status(), await registered.text()).toBe(201);
