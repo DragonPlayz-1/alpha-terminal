@@ -21,13 +21,26 @@ function content(path) {
 }
 function withoutCode(text) { return text.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\s*$/gm, ""); }
 const anchorCache = new Map();
+function anchorSlug(value) {
+  let slug = "";
+  let separator = false;
+  for (const character of value.toLowerCase()) {
+    const word = /[\p{L}\p{N}\p{M}_-]/u.test(character);
+    if (word) {
+      if (separator && slug) slug += "-";
+      slug += character;
+      separator = false;
+    } else if (/\s/u.test(character)) separator = true;
+  }
+  return slug;
+}
 function anchors(path) {
   if (anchorCache.has(path)) return anchorCache.get(path);
   const found = new Set();
   const counts = new Map();
   const text = withoutCode(content(path));
   for (const match of text.matchAll(/^#{1,6}\s+(.+?)\s*#*$/gm)) {
-    const base = match[1].replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, "").toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, "").replace(/\s+/gu, "-");
+    const base = anchorSlug(match[1]);
     const count = counts.get(base) ?? 0;
     counts.set(base, count + 1);
     found.add(count ? `${base}-${count}` : base);
