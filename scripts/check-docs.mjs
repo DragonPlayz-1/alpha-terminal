@@ -27,7 +27,7 @@ function anchors(path) {
   const counts = new Map();
   const text = withoutCode(content(path));
   for (const match of text.matchAll(/^#{1,6}\s+(.+?)\s*#*$/gm)) {
-    const base = match[1].replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, "").toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, "").replaceAll(" ", "-");
+    const base = match[1].replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, "").toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, "").replace(/\s+/gu, "-");
     const count = counts.get(base) ?? 0;
     counts.set(base, count + 1);
     found.add(count ? `${base}-${count}` : base);
