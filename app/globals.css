@@ -16,6 +16,9 @@
   --accent: #8b8cff;
   --accent-bright: #a3a4ff;
   --cyan: #70d6ff;
+  --shadow-card: 0 18px 55px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(255, 255, 255, .025);
+  --shadow-raised: 0 22px 70px rgba(0, 0, 0, .28), 0 0 0 1px rgba(255, 255, 255, .04);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 * { box-sizing: border-box; }
@@ -28,28 +31,42 @@ body {
     radial-gradient(circle at 79% -5%, rgba(139, 140, 255, 0.1), transparent 30rem),
     radial-gradient(circle at -10% 100%, rgba(112, 214, 255, 0.06), transparent 28rem),
     var(--bg);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-feature-settings: "tnum" 1, "cv11" 1;
+  text-rendering: optimizeLegibility;
 }
 
-button, input, select, textarea { font: inherit; }
+@layer base {
+  button, input, select, textarea { font: inherit; }
+  a { color: inherit; text-decoration: none; }
+  select { color-scheme: dark; }
+}
 button { cursor: pointer; }
-a { color: inherit; text-decoration: none; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 3px; }
+body.menu-open { overflow: hidden; }
 
 .tabular { font-variant-numeric: tabular-nums; }
 .glass {
   background: linear-gradient(145deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
   border: 1px solid var(--line);
-  box-shadow: 0 18px 55px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.025);
+  box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px);
 }
-.surface { background: var(--surface); border: 1px solid var(--line-soft); }
+.surface { background: linear-gradient(145deg, rgba(255,255,255,.025), transparent 42%), var(--surface); border: 1px solid var(--line-soft); box-shadow: var(--shadow-card); }
+.surface-lift { transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.surface-lift:hover { transform: translateY(-2px); border-color: rgba(163, 164, 255, .22); box-shadow: var(--shadow-raised); }
 .surface-soft { background: var(--surface-muted); border: 1px solid var(--line-soft); }
 .hairline { border-color: var(--line-soft); }
 
+.skeleton { background: linear-gradient(100deg, rgba(255,255,255,.045) 20%, rgba(255,255,255,.1) 38%, rgba(255,255,255,.045) 56%); background-size: 220% 100%; animation: shimmer 1.8s ease-in-out infinite; }
+.empty-state { display: flex; min-height: 180px; flex-direction: column; align-items: center; justify-content: center; }
+.safe-area-bottom { padding-bottom: calc(.75rem + var(--safe-bottom)); }
+.page-enter { animation: slide-up .35s cubic-bezier(.2,.8,.2,1) both; }
+
 @keyframes pulse-live { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 @keyframes slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.animate-slide-up { animation: slide-up .35s ease-out both; }
+@keyframes shimmer { 0% { background-position: 120% 0; } 100% { background-position: -80% 0; } }
+.animate-slide-up { animation: slide-up .35s cubic-bezier(.2,.8,.2,1) both; }
 .live-dot { animation: pulse-live 1.8s ease-in-out infinite; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -59,4 +76,20 @@ a { color: inherit; text-decoration: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .surface-lift:hover, button:active { transform: none; }
+}
+
+@media (max-width: 639px) {
+  .mobile-scroll-shadow { scrollbar-width: thin; }
+  .safe-area-bottom { padding-bottom: calc(1rem + var(--safe-bottom)); }
+}
+
+@media (max-width: 1399px) {
+  /* The alert form has two text controls and two compact controls. At
+     intermediate widths, keep the controls in two bounded rows instead of
+     letting the auto-sized columns create document-wide overflow. */
+  form[class*="grid-cols-[1fr_auto_1fr_auto]"] { grid-template-columns: minmax(0, 1fr) auto; }
+  form[class*="grid-cols-[1fr_auto_1fr_auto]"] > input,
+  form[class*="grid-cols-[1fr_auto_1fr_auto]"] > select,
+  form[class*="grid-cols-[1fr_auto_1fr_auto]"] > button { min-width: 0; }
 }

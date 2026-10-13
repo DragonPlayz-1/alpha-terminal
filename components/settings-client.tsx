@@ -1,50 +1,71 @@
 "use client";
+
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-import { Save, ShieldCheck, UserRound } from "lucide-react";
-import { Button, Card, SectionHeading } from "@/components/ui";
-import { apiRequest } from "@/lib/api-client";
+import { BellRing, Check, Clock3, Eye, EyeOff, KeyRound, LogOut, Save, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Button, Card, SectionHeading, Skeleton } from "@/components/ui";
+import { ApiRequestError, apiRequest } from "@/lib/api-client";
 
-type Profile = { username: string; email: string; publicProfile: boolean; publicHistory: boolean };
+type Profile = { username: string; email: string; publicProfile: boolean; publicHistory: boolean; emailVerifiedAt: string | null };
+type Session = { id: string; createdAt: string; expiresAt: string; current: boolean };
+type Alert = { id: string; symbol: string; direction: "ABOVE" | "BELOW"; target: string; active: boolean; createdAt: string };
+
 export function SettingsClient() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+
   async function load() {
     setLoading(true);
-    try { const body = await apiRequest<{ user: Profile }>("/api/user/profile"); setProfile(body.user); }
-    catch (e) { setStatus(e instanceof Error ? e.message : "Unable to load profile."); }
+    try { const body = await apiRequest<{ user: Profile }>("/api/user/profile"); setProfile(body.user); setStatus(""); }
+    catch (error) { setStatus(error instanceof Error ? error.message : "Unable to load profile."); }
     finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, []);
+
   async function save(event: FormEvent) {
     event.preventDefault(); if (!profile || busy) return;
     setBusy(true); setStatus("");
-    try {
-      const { user } = await apiRequest<{ user: Profile }>("/api/user/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: profile.username, publicProfile: profile.publicProfile, publicHistory: profile.publicHistory }) });
-      setProfile(user); setStatus("Profile saved.");
-    } catch (e) { setStatus(e instanceof Error ? e.message : "Unable to save profile."); }
+    try { const { user } = await apiRequest<{ user: Profile }>("/api/user/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: profile.username, publicProfile: profile.publicProfile, publicHistory: profile.publicHistory }) }); setProfile(user); setStatus("Profile saved."); }
+    catch (error) { setStatus(error instanceof Error ? error.message : "Unable to save profile."); }
     finally { setBusy(false); }
   }
+
   async function verifyEmail() {
-    if (!profile || busy) return;
-    setBusy(true);
+    if (!profile || busy || profile.emailVerifiedAt) return;
+    setBusy(true); setStatus("");
     try { const body = await apiRequest<{ message: string }>("/api/auth/send-verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: profile.email }) }); setStatus(body.message); }
-    catch (e) { setStatus(e instanceof Error ? e.message : "Unable to send verification."); }
+    catch (error) { setStatus(error instanceof Error ? error.message : "Unable to send verification."); }
     finally { setBusy(false); }
   }
-  return <div className="animate-slide-up">
-    <SectionHeading eyebrow="Control center" title="Settings" description="Manage your profile, privacy, and account access." />
-    {status && <p role="status" className="mb-4 text-sm text-[var(--muted-strong)]">{status}</p>}
-    {loading ? <p className="text-sm text-[var(--muted)]">Loading settings…</p> : !profile ? <Button onClick={load}>Retry</Button> : <div className="grid gap-5 lg:grid-cols-[1fr_.7fr]">
-      <Card className="p-5"><div className="mb-6 flex items-center gap-3 font-semibold text-white"><UserRound size={18} />Profile & privacy</div>
-        <form onSubmit={save} className="space-y-5"><label className="block text-xs text-[var(--muted-strong)]">Username<input required minLength={3} maxLength={24} pattern="[a-zA-Z0-9_]+" value={profile.username} onChange={e => setProfile({ ...profile, username: e.target.value })} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white" /></label>
-          <label className="flex items-start gap-3 rounded-xl border border-white/10 p-4 text-sm text-white"><input type="checkbox" checked={profile.publicProfile} onChange={e => setProfile({ ...profile, publicProfile: e.target.checked })} /><span>Public profile<span className="mt-1 block text-xs text-[var(--muted)]">Display your username and achievements.</span></span></label>
-          <label className="flex items-start gap-3 rounded-xl border border-white/10 p-4 text-sm text-white"><input type="checkbox" checked={profile.publicHistory} onChange={e => setProfile({ ...profile, publicHistory: e.target.checked })} /><span>Public trading statistics<span className="mt-1 block text-xs text-[var(--muted)]">Share performance and appear on leaderboards when your profile is public.</span></span></label>
-          <Button type="submit" disabled={busy}><Save size={15} />{busy ? "Saving…" : "Save profile"}</Button>
-        </form></Card>
-      <Card className="p-5"><div className="flex items-center gap-2 font-semibold text-white"><ShieldCheck size={18} />Account access</div><p className="mt-4 break-all text-sm text-[var(--muted)]">{profile.email}</p><Button variant="secondary" disabled={busy} onClick={verifyEmail} className="mt-4">Send verification email</Button><Link href="/forgot-password" className="mt-5 block text-sm text-[var(--accent-bright)]">Change password via recovery email</Link></Card>
-    </div>}
-  </div>;
+
+  return <div className="animate-slide-up"><SectionHeading eyebrow="Control center" title="Settings" description="Manage your profile, privacy, account access, sessions, and market alerts." />{status && <p role="status" className="mb-4 rounded-xl border border-white/[.08] bg-white/[.025] px-4 py-3 text-sm text-[var(--muted-strong)]">{status}</p>}{loading ? <div className="grid gap-5 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div> : !profile ? <Button onClick={() => void load()}>Retry</Button> : <><div className="grid gap-5 lg:grid-cols-[1fr_.7fr]"><Card className="p-5"><div className="mb-6 flex items-center gap-3 font-semibold text-white"><UserRound size={18} />Profile & privacy</div><form onSubmit={save} className="space-y-5"><label htmlFor="settings-username" className="block text-xs text-[var(--muted-strong)]">Username<input id="settings-username" name="username" required minLength={3} maxLength={24} pattern="[a-zA-Z0-9_]+" autoComplete="username" value={profile.username} onChange={event => setProfile({ ...profile, username: event.target.value })} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-[var(--accent)]" /></label><label className="flex min-h-16 items-start gap-3 rounded-xl border border-white/10 p-4 text-sm text-white"><input type="checkbox" checked={profile.publicProfile} onChange={event => setProfile({ ...profile, publicProfile: event.target.checked })} /><span>Public profile<span className="mt-1 block text-xs text-[var(--muted)]">Display your username and achievements.</span></span></label><label className="flex min-h-16 items-start gap-3 rounded-xl border border-white/10 p-4 text-sm text-white"><input type="checkbox" checked={profile.publicHistory} onChange={event => setProfile({ ...profile, publicHistory: event.target.checked })} /><span>Public trading statistics<span className="mt-1 block text-xs text-[var(--muted)]">Share performance and appear on leaderboards when your profile is public.</span></span></label><Button type="submit" disabled={busy}><Save size={15} />{busy ? "Saving…" : "Save profile"}</Button></form></Card><Card className="p-5"><div className="flex items-center gap-2 font-semibold text-white"><ShieldCheck size={18} />Account access</div><p className="mt-4 break-all text-sm text-[var(--muted)]">{profile.email}</p><div className="mt-4 flex items-center gap-2 text-xs">{profile.emailVerifiedAt ? <><Check size={14} className="text-[var(--positive)]" /><span className="text-[var(--positive)]">Email verified</span></> : <><Clock3 size={14} className="text-amber-300" /><span className="text-amber-300">Email not verified</span></>}</div><Button variant="secondary" disabled={busy || Boolean(profile.emailVerifiedAt)} onClick={() => void verifyEmail()} className="mt-4">{profile.emailVerifiedAt ? "Email verified" : "Send verification email"}</Button><Link href="/forgot-password" className="mt-5 block text-sm text-[var(--accent-bright)]">Change password via recovery email</Link></Card></div><div className="mt-5 grid gap-5 lg:grid-cols-2"><SessionsPanel /><AlertsPanel /><PasswordPanel /></div></>}</div>;
 }
+
+function SessionsPanel() {
+  const router = useRouter(); const [sessions, setSessions] = useState<Session[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [busy, setBusy] = useState("");
+  async function load() { setLoading(true); setError(""); try { const body = await apiRequest<{ sessions: Session[] }>("/api/auth/sessions"); setSessions(body.sessions); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to load sessions."); } finally { setLoading(false); } }
+  useEffect(() => { void load(); }, []);
+  async function revoke(id: string) { if (busy) return; setBusy(id); setError(""); try { const body = await apiRequest<{ loggedOut?: boolean }>("/api/auth/sessions", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }); if (body.loggedOut) { router.replace("/"); router.refresh(); } else await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to revoke session."); } finally { setBusy(""); } }
+  async function revokeOthers() { if (busy) return; setBusy("others"); setError(""); try { await apiRequest("/api/auth/sessions", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revokeOthers: true }) }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to revoke other sessions."); } finally { setBusy(""); } }
+  return <Card className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2 font-semibold text-white"><ShieldCheck size={18} />Active sessions</div><p className="mt-1 text-xs leading-5 text-[var(--muted)]">End sessions on devices you no longer use.</p></div><Button size="sm" variant="secondary" disabled={busy === "others" || sessions.length < 2} onClick={() => void revokeOthers()}><LogOut size={14} />Revoke others</Button></div>{error && <p role="alert" className="mt-4 text-xs text-[var(--negative)]">{error}</p>}{loading ? <div className="mt-5 space-y-3"><Skeleton className="h-14" /><Skeleton className="h-14" /></div> : <div className="mt-5 space-y-3">{sessions.map(session => <div key={session.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/[.07] bg-white/[.02] p-3"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold text-white">{session.current ? "This session" : "Signed-in session"}{session.current && <span className="rounded-full bg-[var(--positive)]/10 px-2 py-0.5 text-[10px] text-[var(--positive)]">Current</span>}</div><div className="mt-1 truncate text-[10px] text-[var(--muted)]">Started {new Date(session.createdAt).toLocaleString()} · expires {new Date(session.expiresAt).toLocaleDateString()}</div></div><Button size="sm" variant={session.current ? "danger" : "ghost"} disabled={busy === session.id} onClick={() => void revoke(session.id)}>{busy === session.id ? "Revoking…" : session.current ? "Sign out" : "Revoke"}</Button></div>)}{!sessions.length && <p className="text-xs text-[var(--muted)]">No active sessions found.</p>}</div>}</Card>;
+}
+
+function AlertsPanel() {
+  const [alerts, setAlerts] = useState<Alert[]>([]); const [form, setForm] = useState({ symbol: "BTC-USD", direction: "ABOVE" as "ABOVE" | "BELOW", target: "" }); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function load() { setLoading(true); setError(""); try { const body = await apiRequest<{ alerts: Alert[] }>("/api/alerts"); setAlerts(body.alerts); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to load price alerts."); } finally { setLoading(false); } }
+  useEffect(() => { void load(); }, []);
+  async function create(event: FormEvent) { event.preventDefault(); if (busy) return; setBusy(true); setError(""); try { await apiRequest("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }); setForm(current => ({ ...current, target: "" })); await load(); } catch (caught) { setError(caught instanceof ApiRequestError ? caught.message : "Unable to create price alert."); } finally { setBusy(false); } }
+  async function remove(id: string) { setBusy(true); setError(""); try { await apiRequest(`/api/alerts/${id}`, { method: "DELETE" }); setAlerts(current => current.filter(alert => alert.id !== id)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to delete price alert."); } finally { setBusy(false); } }
+  return <Card className="p-5"><div className="flex items-center gap-2 font-semibold text-white"><BellRing size={18} />Price alerts</div><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Create one-time virtual alerts delivered to your notification center.</p><form onSubmit={create} className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_1fr_auto]"><label className="sr-only" htmlFor="alert-symbol">Symbol</label><input id="alert-symbol" list="alert-symbols" value={form.symbol} onChange={event => setForm({ ...form, symbol: event.target.value })} placeholder="BTC-USD" className="h-10 min-w-0 rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-xs text-white outline-none focus:border-[var(--accent)]" /><datalist id="alert-symbols"><option value="BTC-USD" /><option value="ETH-USD" /><option value="SOL-USD" /><option value="XRP-USD" /><option value="DOGE-USD" /></datalist><label className="sr-only" htmlFor="alert-direction">Direction</label><select id="alert-direction" value={form.direction} onChange={event => setForm({ ...form, direction: event.target.value as "ABOVE" | "BELOW" })} className="h-10 min-w-0 rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-xs text-white outline-none focus:border-[var(--accent)]"><option value="ABOVE">At or above</option><option value="BELOW">At or below</option></select><label className="sr-only" htmlFor="alert-target">Target price</label><input id="alert-target" type="number" min="0.00000001" step="any" inputMode="decimal" required value={form.target} onChange={event => setForm({ ...form, target: event.target.value })} placeholder="Target price" className="h-10 min-w-0 rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-xs text-white outline-none focus:border-[var(--accent)]" /><Button size="sm" type="submit" disabled={busy}>{busy ? "Saving…" : "Add alert"}</Button></form>{error && <p role="alert" className="mt-3 text-xs text-[var(--negative)]">{error}</p>}{loading ? <div className="mt-5"><Skeleton className="h-14" /></div> : <div className="mt-5 space-y-2">{alerts.map(alert => <div key={alert.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/[.07] bg-white/[.02] p-3"><div className="flex min-w-0 items-center gap-2 text-xs"><span className="font-semibold text-white">{alert.symbol}</span><span className="text-[var(--muted)]">{alert.direction === "ABOVE" ? "≥" : "≤"} {alert.target}</span><span className={alert.active ? "text-[var(--positive)]" : "text-[var(--muted)]"}>{alert.active ? "Active" : "Triggered"}</span></div><Button size="sm" variant="ghost" disabled={busy} aria-label={`Delete ${alert.symbol} price alert`} onClick={() => void remove(alert.id)}><Trash2 size={14} /></Button></div>)}{!alerts.length && <p className="text-xs text-[var(--muted)]">No price alerts yet.</p>}</div>}</Card>;
+}
+
+function PasswordPanel() {
+  const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmation: "" }); const [show, setShow] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
+  async function submit(event: FormEvent) { event.preventDefault(); if (busy) return; setBusy(true); setError(""); setMessage(""); try { await apiRequest("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }); setForm({ currentPassword: "", newPassword: "", confirmation: "" }); setMessage("Password changed. Other active sessions were signed out."); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to change your password."); } finally { setBusy(false); } }
+  return <Card className="p-5"><div className="flex items-center gap-2 font-semibold text-white"><KeyRound size={18} />Change password</div><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Use at least 10 characters. Other active devices will be signed out after a successful change.</p><form onSubmit={submit} className="mt-5 space-y-3"><PasswordInput id="current-password" label="Current password" value={form.currentPassword} onChange={value => setForm({ ...form, currentPassword: value })} show={show} /><PasswordInput id="new-password" label="New password" value={form.newPassword} onChange={value => setForm({ ...form, newPassword: value })} show={show} /><PasswordInput id="confirm-password" label="Confirm new password" value={form.confirmation} onChange={value => setForm({ ...form, confirmation: value })} show={show} /><button type="button" onClick={() => setShow(current => !current)} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-xs text-[var(--accent-bright)] hover:bg-white/[.05]">{show ? <EyeOff size={14} /> : <Eye size={14} />}{show ? "Hide passwords" : "Show passwords"}</button>{error && <p role="alert" className="text-xs text-[var(--negative)]">{error}</p>}{message && <p role="status" className="text-xs text-[var(--positive)]">{message}</p>}<Button type="submit" disabled={busy}>{busy ? "Changing…" : "Change password"}</Button></form></Card>;
+}
+
+function PasswordInput({ id, label, value, onChange, show }: { id: string; label: string; value: string; onChange: (value: string) => void; show: boolean }) { return <label htmlFor={id} className="block text-xs text-[var(--muted-strong)]">{label}<input id={id} name={id} type={show ? "text" : "password"} autoComplete={id === "current-password" ? "current-password" : "new-password"} minLength={10} maxLength={72} required value={value} onChange={event => onChange(event.target.value)} className="mt-2 h-10 w-full rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-sm text-white outline-none focus:border-[var(--accent)]" /></label>; }

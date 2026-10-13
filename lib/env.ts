@@ -17,21 +17,11 @@ const envSchema = z.object({
   TRUSTED_CLIENT_IP_HEADER: z.string().regex(/^[A-Za-z0-9-]{1,80}$/).or(z.literal("")).default(""),
 });
 
-const parsedEnv = envSchema.parse({
-  DATABASE_URL: process.env.DATABASE_URL,
-  NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
-  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-  APP_URL: process.env.APP_URL,
-  MARKET_PROVIDER: process.env.MARKET_PROVIDER,
-  BINANCE_REST_URL: process.env.BINANCE_REST_URL,
-  QUOTE_MAX_AGE_MS: process.env.QUOTE_MAX_AGE_MS,
-  TRADING_FEE_RATE: process.env.TRADING_FEE_RATE,
-  SESSION_SECRET: process.env.SESSION_SECRET,
-  SMTP_URL: process.env.SMTP_URL,
-  MAIL_FROM: process.env.MAIL_FROM,
-  TRUSTED_ORIGINS: process.env.TRUSTED_ORIGINS,
-  TRUSTED_CLIENT_IP_HEADER: process.env.TRUSTED_CLIENT_IP_HEADER,
-});
+// This module is server-only. Read the environment as an object: direct
+// process.env.NEXT_PUBLIC_* references are replaced at build time by Next.
+// A promoted standalone artifact must validate cookies/origins and construct
+// recovery links using its RUNNING environment, not the build machine's URL.
+const parsedEnv = envSchema.parse(process.env);
 
 if (process.env.NODE_ENV === "production" && !parsedEnv.SESSION_SECRET) {
   throw new Error("SESSION_SECRET is required in production.");

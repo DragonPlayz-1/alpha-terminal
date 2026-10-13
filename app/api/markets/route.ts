@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { apiError, apiSuccess, getErrorMessage } from "@/lib/http";
+import { apiError, apiException, apiSuccess } from "@/lib/http";
 import { getInstruments, refreshQuotes } from "@/server/market-data/service";
 import { isFresh } from "@/server/market-data/service";
 import { getTradingConfig } from "@/server/config";
@@ -52,8 +52,8 @@ export async function GET(request: NextRequest) {
         // Return the last persisted quote and let the UI show its cached state.
       }
     }
-    return apiSuccess({ instruments: instruments.map(instrument => serializeInstrument(instrument, quoteMaxAgeMs)), provider: [...new Set(instruments.map(instrument => instrument.dataProvider))].join(",") || "coinbase", feeRate });
+    return apiSuccess({ instruments: instruments.map(instrument => serializeInstrument(instrument, quoteMaxAgeMs)), provider: [...new Set(instruments.map(instrument => instrument.dataProvider))].join(",") || "coinbase", feeRate, quoteMaxAgeMs });
   } catch (error) {
-    return apiError(getErrorMessage(error), 500, "MARKET_DATA_ERROR");
+    return apiException(error, "Market data is temporarily unavailable.", 503, "MARKET_DATA_UNAVAILABLE");
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { apiError, apiSuccess, getErrorMessage } from "@/lib/http";
+import { apiError, apiException, apiSuccess, getErrorMessage } from "@/lib/http";
 import { requireApiUser } from "@/server/auth/session";
 import { createOrder, getOrders, getOrder, orderSchema } from "@/server/trading/service";
 import { enforceRateLimit } from "@/server/auth/rate-limit";
@@ -11,26 +11,28 @@ function serializeOrder(o: Awaited<ReturnType<typeof getOrders>>[number]) {
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const user = await requireApiUser();
   if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
   const status = request.nextUrl.searchParams.get("status") ?? undefined;
   const scope = request.nextUrl.searchParams.get("scope") ?? "main";
   if (scope.length > 80) return apiError("Invalid account scope.", 400, "INVALID_SCOPE");
   if (status && !["OPEN", "FILLED", "CANCELLED", "REJECTED", "EXPIRED", "PENDING", "PARTIALLY_FILLED", "all"].includes(status)) return apiError("Invalid order status.", 400, "INVALID_ORDER_STATUS");
-  try {
     const orders = await getOrders(user.id, status, scope);
     return apiSuccess({ orders: orders.map(serializeOrder) });
-  } catch {
-    return apiError("Trading account unavailable.", 404, "ACCOUNT_NOT_FOUND");
+  } catch (error) {
+    if (error instanceof Error && error.message === "Trading account unavailable.") return apiError(error.message, 404, "ACCOUNT_NOT_FOUND");
+    return apiException(error, "Orders unavailable.", 503, "ORDERS_UNAVAILABLE");
   }
 }
 export async function POST(request: NextRequest) {
+  try {
   const user = await requireApiUser();
   if (!user) return apiError("Authentication required.", 401, "UNAUTHENTICATED");
   if (!(await enforceRateLimit(`orders:${user.id}`, 30)).allowed) return apiError("Order rate limit reached.", 429);
   const parsed = orderSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiError(parsed.error.issues[0]?.message ?? "Invalid order.");
-  try { const created = await createOrder(user.id, parsed.data); const order = await getOrder(user.id, created.id, parsed.data.scope); return apiSuccess({ order: order ? serializeOrder(order) : created }, 201); }
+  const created = await createOrder(user.id, parsed.data); const order = await getOrder(user.id, created.id, parsed.data.scope); return apiSuccess({ order: order ? serializeOrder(order) : created }, 201); }
   catch (error) {
     const message = getErrorMessage(error);
     if (message.startsWith("Unable to complete")) { return apiError(message, 503, "TRADING_UNAVAILABLE"); }

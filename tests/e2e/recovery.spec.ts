@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { db } from "@/lib/db";
 
 test.afterAll(() => db.$disconnect());
@@ -39,6 +39,7 @@ test("recovery emails, password reset, verification and session revocation in th
     expect(token).toBeTruthy();
     await page.goto(`/reset-password?token=${token}`);
     await page.getByPlaceholder("10+ characters").fill("replacement-test-password");
+    await page.getByPlaceholder("Repeat your password").fill("replacement-test-password");
     const [reset] = await Promise.all([page.waitForResponse(r => r.url().endsWith("/api/auth/reset-password")), page.getByRole("button", { name: "Set new password" }).click()]);
     expect(reset.status()).toBe(200);
     expect((await request.get("/api/auth/me")).status()).toBe(401);

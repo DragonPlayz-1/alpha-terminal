@@ -5,9 +5,10 @@ import { processOpenOrders } from "@/server/trading/service";
 import { processDerivatives } from "@/server/trading/derivatives";
 import { takeSnapshot } from "@/server/trading/valuation";
 import { startCoinbaseTickerStream } from "@/server/market-data/stream";
+import { processPriceAlerts } from "@/server/market-data/alerts";
 import { finalizeExpiredChallenges, writeLeaderboardSnapshot } from "@/server/competition/service";
 import { acquireWorkerLease, renewWorkerLease, releaseWorkerLease, workerSuccess, workerOwner } from "@/server/worker-health";
-import { asWorker, assertWorkerRunning } from "@/server/worker-context";
+import { WorkerLeaseLostError, asWorker, assertWorkerRunning } from "@/server/worker-context";
 
 let lastMaintenance = 0;
 const abort = new AbortController();
@@ -18,6 +19,7 @@ async function tick() {
   const instruments = await getInstruments();
   await refreshQuotes(instruments.map(i => i.symbol));
   assertWorkerRunning();
+  await processPriceAlerts();
   // Risk processing precedes new opening fills.
   await processDerivatives();
   const filled = await processOpenOrders();
@@ -73,7 +75,12 @@ async function main() {
         stream = await startCoinbaseTickerStream().catch(error => { console.warn(JSON.stringify({ event: "market_stream_unavailable", message: error instanceof Error ? error.message : "unknown" })); return null; });
       }
       try { await asWorker(workerOwner, abort.signal, tick); }
-      catch (error) { console.error(JSON.stringify({ event: "worker_tick_failed", message: error instanceof Error ? error.message : "unknown" })); }
+      catch (error) {
+        if (error instanceof WorkerLeaseLostError) {
+          if (!abort.signal.aborted) console.warn(JSON.stringify({ event: "worker_leadership_lost" }));
+          abort.abort();
+        } else console.error(JSON.stringify({ event: "worker_tick_failed", message: error instanceof Error ? error.message : "unknown" }));
+      }
       await sleep(5000, undefined, { signal: abort.signal }).catch(() => undefined);
     }
   } finally {

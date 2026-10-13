@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { apiError, apiSuccess, getErrorMessage } from "@/lib/http";
+import { apiError, apiException, apiSuccess } from "@/lib/http";
 import { getQuote } from "@/server/market-data/service";
 
 export async function GET(_request: NextRequest, context: { params: Promise<{ symbol: string }> }) {
@@ -32,6 +32,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ sy
       },
     });
   } catch (error) {
-    return apiError(getErrorMessage(error), 404, "INSTRUMENT_NOT_FOUND");
+    if (error instanceof Error && error.message === "Instrument not found.") return apiError(error.message, 404, "INSTRUMENT_NOT_FOUND");
+    return apiException(error, "Quote unavailable.", 503, "QUOTE_UNAVAILABLE");
   }
 }

@@ -150,6 +150,7 @@ model User {
   leaderboardSnapshots LeaderboardSnapshot[]
   passwordTokens       PasswordToken[]
   priceAlerts          PriceAlert[]
+  journalEntries       TradeJournalEntry[]
 
   @@index([createdAt])
 }
@@ -203,6 +204,7 @@ model TradingAccount {
   resets             AccountReset[]
   fundingEvents      FundingEvent[]
   liquidationEvents  LiquidationEvent[]
+  journalEntries     TradeJournalEntry[]
 
   @@unique([userId, scope])
   @@index([accountStatus])
@@ -243,6 +245,7 @@ model Instrument {
   orders             Order[]
   positions          Position[]
   watchlistItems     WatchlistItem[]
+  journalEntries     TradeJournalEntry[]
 
   @@index([assetClass, tradingStatus])
   @@index([dataProvider])
@@ -316,6 +319,10 @@ model Order {
   account          TradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   instrument       Instrument     @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
   executions       Execution[]
+  events           OrderEvent[]
+  linkedOrder      Order?         @relation("OrderLinks", fields: [linkedOrderId], references: [id], onDelete: SetNull)
+  childOrders      Order[]        @relation("OrderLinks")
+  journalEntries   TradeJournalEntry[]
 
   @@unique([accountId, clientOrderId])
   @@index([accountId, status, createdAt])
@@ -336,6 +343,19 @@ model Execution {
   order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId, executionTimestamp])
+}
+
+model OrderEvent {
+  id        String      @id @default(cuid())
+  orderId   String
+  eventType String
+  status    OrderStatus?
+  message   String
+  metadata  Json?
+  createdAt DateTime    @default(now())
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
 }
 
 model Position {
@@ -575,6 +595,29 @@ model PriceAlert {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([active, symbol])
+}
+
+model TradeJournalEntry {
+  id             String          @id @default(cuid())
+  userId         String
+  accountId      String
+  orderId        String?
+  instrumentId   String?
+  title          String?
+  notes          String
+  tags           Json?
+  emotionalState String?
+  outcome        String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account        TradingAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  order          Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  instrument     Instrument?     @relation(fields: [instrumentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([orderId])
 }
 
 model FundingEvent {

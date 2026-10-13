@@ -1,76 +1,146 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BarChart3, CheckCircle2, ChevronDown, Crosshair, Info, Layers3, Plus, RefreshCcw, Search, Settings2 } from "lucide-react";
-import { Badge, Button, Card, cn } from "@/components/ui";
-import { PriceChart } from "@/components/price-chart";
+import { ScopedLink as Link } from "@/components/scoped-link";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Layers3, Plus, RefreshCcw, Search } from "lucide-react";
+import { Badge, Button, Card, EmptyState, IconButton, SectionHeading, Skeleton } from "@/components/ui";
+import { TerminalChart } from "@/components/terminal-chart";
+import { OrderPreview } from "@/components/order-preview";
+import { useWatchlists } from "@/components/use-watchlists";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { apiRequest } from "@/lib/api-client";
 import { submitPaperOrder } from "@/lib/order-client";
 
-type Market = { symbol: string; name: string; baseAsset: string; instrumentType: string; minimumQuantity: string; quote?: { bid: string | null; ask: string | null; lastPrice: string | null; priceChangePct: string | null; volume: string | null; freshness: string; receivedAt: string } | null };
-type Candle = { time: number; open: string; high: string; low: string; close: string; volume: string };
+type Quote = { bid: string | null; ask: string | null; lastPrice: string | null; priceChangePct: string | null; volume: string | null; freshness: string; receivedAt: string; sourceTimestamp: string | null };
+type Market = { symbol: string; name: string; baseAsset: string; instrumentType: string; minimumQuantity: string; quote?: Quote | null };
+type Position = { symbol: string; instrumentType: string; quantity: string; marketValue: string; unrealizedPnl: string };
 
 export function TerminalClient({ initialSymbol = "BTC-USD", initialScope = "main" }: { initialSymbol?: string; initialScope?: string }) {
-  const [markets, setMarkets] = useState<Market[]>([]); const [selected, setSelected] = useState(initialSymbol); const [scope] = useState(initialScope); const [query, setQuery] = useState(""); const [timeframe, setTimeframe] = useState("1h"); const [candles, setCandles] = useState<Candle[]>([]); const [side, setSide] = useState<"BUY" | "SELL">("BUY"); const [orderType, setOrderType] = useState<"MARKET" | "LIMIT" | "STOP_MARKET" | "STOP_LIMIT" | "TAKE_PROFIT" | "TAKE_PROFIT_LIMIT">("MARKET"); const [quantity, setQuantity] = useState(""); const [limitPrice, setLimitPrice] = useState(""); const [stopPrice, setStopPrice] = useState(""); const [submitting, setSubmitting] = useState(false); const [message, setMessage] = useState<{ tone: "positive" | "negative"; text: string } | null>(null); const [positions, setPositions] = useState<Array<{ symbol: string; quantity: string; marketValue: string; unrealizedPnl: string }>>([]); const [cash, setCash] = useState("0"); const [feeRate, setFeeRate] = useState("0.001");
-  const current = markets.find((market) => market.symbol === selected) ?? markets[0];
-  const busy = useRef(false);
-  const candleRequest = useRef(0);
-  const [bracketStop, setBracketStop] = useState("");
-  const [bracketTarget, setBracketTarget] = useState("");
-  const filtered = useMemo(() => markets.filter((market) => `${market.symbol} ${market.name}`.toLowerCase().includes(query.toLowerCase())), [markets, query]);
-  async function loadMarkets() {
-    try {
-      const body = await apiRequest<{ instruments: Market[]; feeRate: string }>("/api/markets?refresh=1");
-      const next = body.instruments.filter(market => market.instrumentType === "SPOT");
-      setFeeRate(body.feeRate); setMarkets(next);
-      setSelected(previous => next.some(item => item.symbol === previous) ? previous : next[0]?.symbol ?? previous);
-    } catch (e) { setMessage({ tone: "negative", text: e instanceof Error ? e.message : "Markets unavailable." }); }
-  }
-  async function loadAccount() {
-    try {
-      const body = await apiRequest<{ account: { availableCash: string }; positions: Array<{ symbol: string; instrumentType: string; quantity: string; marketValue: string; unrealizedPnl: string }> }>(`/api/portfolio?scope=${encodeURIComponent(scope)}`);
-      setPositions(body.positions.filter(p => p.instrumentType === "SPOT")); setCash(body.account.availableCash);
-    } catch (e) { setMessage({ tone: "negative", text: e instanceof Error ? e.message : "Account unavailable." }); }
-  }
-  async function loadCandles() {
-    if (!selected) return;
-    const sequence = ++candleRequest.current;
-    try { const body = await apiRequest<{ candles: Candle[] }>(`/api/markets/${encodeURIComponent(selected)}/candles?timeframe=${timeframe}&limit=160`); if (sequence === candleRequest.current) setCandles(body.candles); }
-    catch { if (sequence === candleRequest.current) setCandles([]); }
-  }
-  useEffect(() => { loadMarkets(); loadAccount(); const timer = setInterval(() => { loadMarkets(); loadAccount(); }, 12_000); return () => clearInterval(timer); }, []);
-  useEffect(() => { const source = new EventSource(`/api/stream/quotes?symbols=${encodeURIComponent("BTC-USD,ETH-USD,SOL-USD,XRP-USD,DOGE-USD,ADA-USD,AVAX-USD,LINK-USD,LTC-USD,DOT-USD")}`); source.addEventListener("quotes", event => { const updates = JSON.parse((event as MessageEvent).data) as Array<{ symbol: string; bid: string | null; ask: string | null; lastPrice: string | null; volume: string | null; priceChangePct: string | null; freshness: string; receivedAt: string }>; setMarkets(current => current.map(market => { const update = updates.find(item => item.symbol === market.symbol); if (!update) return market; return { ...market, quote: { ...market.quote, bid: update.bid, ask: update.ask, lastPrice: update.lastPrice, volume: update.volume, priceChangePct: update.priceChangePct, freshness: update.freshness, receivedAt: update.receivedAt } }; })); }); return () => source.close(); }, []);
-  useEffect(() => { setCandles([]); void loadCandles(); return () => { candleRequest.current++; }; }, [selected, timeframe]);
-  useEffect(() => { setLimitPrice(""); setStopPrice(""); setBracketStop(""); setBracketTarget(""); }, [selected]);
-  useEffect(() => { if (current?.quote?.lastPrice && !limitPrice) setLimitPrice(current.quote.lastPrice); }, [current?.symbol, current?.quote?.lastPrice]);
-  const isConditional = ["STOP_MARKET", "STOP_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"].includes(orderType); const isLimit = orderType === "LIMIT" || orderType === "STOP_LIMIT" || orderType === "TAKE_PROFIT_LIMIT"; const estimatedPrice = isLimit ? Number(limitPrice || 0) : Number(side === "BUY" ? current?.quote?.ask ?? current?.quote?.lastPrice ?? 0 : current?.quote?.bid ?? current?.quote?.lastPrice ?? 0); const estimatedNotional = estimatedPrice * Number(quantity || 0); const fee = estimatedNotional * Number(feeRate); const total = side === "BUY" ? estimatedNotional + fee : estimatedNotional - fee;
-  async function submitOrder() {
-    if (busy.current) return;
-    setMessage(null);
-    if (!current || !quantity || Number(quantity) <= 0) { setMessage({ tone: "negative", text: "Enter a valid quantity first." }); return; }
-    if (isConditional && (!stopPrice || Number(stopPrice) <= 0) || isLimit && (!limitPrice || Number(limitPrice) <= 0)) { setMessage({ tone: "negative", text: "Enter the required trigger and limit prices." }); return; }
-    setSubmitting(true); busy.current = true;
-    try {
-      const body = await submitPaperOrder({ symbol: current.symbol, side, orderType, quantity, limitPrice: isLimit ? limitPrice : undefined, stopPrice: isConditional ? stopPrice : undefined, bracketStop: side === "BUY" ? bracketStop || undefined : undefined, bracketTarget: side === "BUY" ? bracketTarget || undefined : undefined, scope });
-      setMessage({ tone: "positive", text: body.order.status === "FILLED" ? "Order filled and portfolio updated." : `Order ${body.order.status.toLowerCase()}. Check Orders for its current status.` });
-      setQuantity(""); await loadAccount();
-    } catch (e) { setMessage({ tone: "negative", text: e instanceof Error ? e.message : "Order was rejected." }); }
-    finally { busy.current = false; setSubmitting(false); }
-  }
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [selected, setSelected] = useState(initialSymbol);
+  const [query, setQuery] = useState("");
+  const [listId, setListId] = useState("default");
+  const { watchlists, error: listError } = useWatchlists();
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [cash, setCash] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [streamState, setStreamState] = useState("Connecting");
+  const [loaded, setLoaded] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [now, setNow] = useState(0);
+  const [maxAge, setMaxAge] = useState(15000);
+  useEffect(() => { setSelected(initialSymbol); }, [initialSymbol]);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    let pending = false;
+    async function load() {
+      if (pending) return;
+      pending = true;
+      try {
+        const [marketBody, portfolio] = await Promise.all([
+          apiRequest<{ instruments: Market[]; quoteMaxAgeMs: number }>("/api/markets?refresh=0", { signal: controller.signal }),
+          apiRequest<{ account: { availableCash: string }; positions: Position[] }>(`/api/portfolio?scope=${encodeURIComponent(initialScope)}`, { signal: controller.signal }),
+        ]);
+        if (controller.signal.aborted) return;
+        setMarkets(marketBody.instruments.filter(market => market.instrumentType === "SPOT")); setMaxAge(marketBody.quoteMaxAgeMs);
+        setPositions(portfolio.positions.filter(position => position.instrumentType === "SPOT")); setCash(portfolio.account.availableCash); setError("");
+        void apiRequest<{ instruments: Market[] }>("/api/markets?refresh=1", { signal: controller.signal }).then(body => { if (!controller.signal.aborted) setMarkets(body.instruments.filter(market => market.instrumentType === "SPOT")); }).catch(() => { /* Keep the cached view usable; submission requires a fresh quote. */ });
+      } catch (caught) { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Workspace unavailable."); }
+      finally { pending = false; if (!controller.signal.aborted) setLoaded(true); }
+    }
+    void load(); const timer = setInterval(() => void load(), 12000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [initialScope, refresh]);
+  const symbols = markets.map(market => market.symbol).join(",");
+  useEffect(() => {
+    if (!symbols) return;
+    const source = new EventSource(`/api/stream/quotes?symbols=${encodeURIComponent(symbols)}`);
+    source.onerror = () => setStreamState("Reconnecting");
+    source.addEventListener("quotes", event => {
+      try {
+        const updates: unknown = JSON.parse((event as MessageEvent).data);
+        if (!Array.isArray(updates)) throw new Error("Invalid stream payload");
+        const valid = updates.filter((item): item is Quote & { symbol: string } => item && typeof item.symbol === "string" && typeof item.freshness === "string" && typeof item.receivedAt === "string" && [item.bid, item.ask, item.lastPrice, item.priceChangePct, item.volume].every(value => value === null || typeof value === "string" && Number.isFinite(Number(value))));
+        setMarkets(current => current.map(market => { const update = valid.find(item => item.symbol === market.symbol); return update ? { ...market, quote: update } : market; }));
+        setStreamState("Connected");
+      } catch { setStreamState("Reconnecting"); }
+    });
+    return () => source.close();
+  }, [symbols]);
+  const current = markets.find(market => market.symbol === selected);
+  const list = listId === "all" ? undefined : watchlists.find(list => list.id === listId) ?? watchlists.find(list => list.isDefault) ?? watchlists[0];
+  const visible = (list ? list.items.map(item => markets.find(market => market.symbol === item.instrument.symbol)).filter((market): market is Market => Boolean(market)) : markets).filter(market => `${market.symbol} ${market.name}`.toLowerCase().includes(query.toLowerCase()));
+  const fresh = current?.quote?.freshness === "LIVE" && Boolean(current.quote.sourceTimestamp) && now - Date.parse(current.quote.sourceTimestamp!) <= maxAge;
 
-  return <div className="animate-slide-up">
-    <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.2em] text-[var(--accent-bright)]"><span className="h-1.5 w-1.5 rounded-full bg-[var(--positive)] live-dot" />Execution workspace {scope !== "main" && <Badge tone="accent">Challenge account</Badge>}</div><h1 className="text-2xl font-semibold tracking-[-.04em] text-white md:text-3xl">Trading terminal</h1><p className="mt-2 text-sm text-[var(--muted)]">Market data in. Deliberate decisions out. Simulation only.</p></div><div className="flex items-center gap-2 text-xs text-[var(--muted)]"><span>Available cash</span><span className="tabular font-semibold text-white">{formatCurrency(cash)}</span><Link href={`/orders?scope=${encodeURIComponent(scope)}`} className="ml-3 rounded-lg border border-white/[.08] px-3 py-2 text-[var(--muted-strong)] hover:bg-white/[.06]">Orders</Link></div></div>
-    <div className="grid gap-4 xl:grid-cols-[minmax(190px,.22fr)_minmax(420px,1fr)_minmax(300px,.34fr)]">
-      <Card className="min-h-[620px] overflow-hidden"><div className="border-b border-white/[.06] p-4"><div className="mb-3 flex items-center justify-between"><div className="text-xs font-semibold text-white">Watchlist</div><button className="rounded-lg p-1.5 text-[#68748a] hover:bg-white/[.06] hover:text-white"><Plus size={15} /></button></div><label className="relative block"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#647086]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" className="h-9 w-full rounded-lg border border-white/[.08] bg-white/[.035] pl-9 pr-2 text-xs text-white outline-none focus:border-[var(--accent)]" /></label></div><div className="divide-y divide-white/[.045]">{filtered.map((market) => { const change = Number(market.quote?.priceChangePct ?? 0); return <button key={market.symbol} onClick={() => setSelected(market.symbol)} className={cn("w-full px-4 py-3 text-left transition-colors", selected === market.symbol ? "bg-[var(--accent)]/[.12]" : "hover:bg-white/[.035]")}><div className="flex items-center justify-between"><span className="text-xs font-semibold text-white">{market.baseAsset}</span><span className={`tabular text-[10px] ${change >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}>{formatPercent(market.quote?.priceChangePct ?? 0)}</span></div><div className="mt-1 flex items-center justify-between"><span className="text-[10px] text-[var(--muted)]">{market.symbol.replace("-USD", "")}/USD</span><span className="tabular text-[11px] text-[var(--muted-strong)]">{market.quote?.lastPrice ? formatCurrency(market.quote.lastPrice, Number(market.quote.lastPrice) < 1 ? 4 : 2) : "—"}</span></div></button>; })}</div>{!filtered.length && <div className="p-5 text-center text-xs text-[var(--muted)]">No markets found.</div>}</Card>
-      <Card className="min-h-[620px] overflow-hidden"><div className="flex flex-col gap-4 border-b border-white/[.06] px-5 py-4 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-400/15 text-xs font-bold text-orange-300">{current?.baseAsset?.slice(0, 1) ?? "—"}</div><div><div className="flex items-center gap-2 text-base font-semibold text-white">{current?.baseAsset ?? "Select market"}<span className="text-xs font-normal text-[var(--muted)]">/ USD</span><Badge tone={current?.quote?.freshness === "LIVE" ? "positive" : "warning"}>{current?.quote?.freshness ?? "Waiting"}</Badge></div><div className="mt-1 text-[10px] text-[var(--muted)]">{current?.name ?? ""} · {current?.quote?.receivedAt ? `updated ${new Date(current.quote.receivedAt).toLocaleTimeString()}` : "Awaiting quote"}</div></div></div><div className="flex items-center gap-4"><div className="text-right"><div className="tabular text-xl font-semibold text-white">{current?.quote?.lastPrice ? formatCurrency(current.quote.lastPrice, Number(current.quote.lastPrice) < 1 ? 5 : 2) : "—"}</div><div className={`tabular text-xs ${Number(current?.quote?.priceChangePct ?? 0) >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}>{formatPercent(current?.quote?.priceChangePct ?? 0)}</div></div><button className="rounded-lg p-2 text-[#647086] hover:bg-white/[.06] hover:text-white" onClick={() => { loadMarkets(); loadCandles(); }}><RefreshCcw size={15} /></button></div></div><div className="flex items-center justify-between border-b border-white/[.06] px-5 py-3"><div className="flex items-center gap-1">{["1m", "5m", "15m", "1h", "6h", "1d"].map((item) => <button key={item} onClick={() => setTimeframe(item)} className={cn("rounded-lg px-2.5 py-1.5 text-[11px] font-semibold", timeframe === item ? "bg-white/[.1] text-white" : "text-[#68748a] hover:bg-white/[.05] hover:text-[var(--muted-strong)]")}>{item}</button>)}</div><div className="flex items-center gap-1 text-[#647086]"><button title="Indicators" className="rounded-lg p-2 hover:bg-white/[.06] hover:text-white"><BarChart3 size={15} /></button><button title="Crosshair" className="rounded-lg p-2 hover:bg-white/[.06] hover:text-white"><Crosshair size={15} /></button><button title="Chart settings" className="rounded-lg p-2 hover:bg-white/[.06] hover:text-white"><Settings2 size={15} /></button></div></div><div className="p-3"><PriceChart candles={candles} height={390} /></div><div className="grid grid-cols-3 gap-px border-t border-white/[.06] bg-white/[.05]"><QuoteStat label="Bid" value={current?.quote?.bid ? formatCurrency(current.quote.bid, Number(current.quote.bid) < 1 ? 5 : 2) : "—"} /><QuoteStat label="Ask" value={current?.quote?.ask ? formatCurrency(current.quote.ask, Number(current.quote.ask) < 1 ? 5 : 2) : "—"} /><QuoteStat label="24h volume" value={current?.quote?.volume ? formatNumber(current.quote.volume, 0) : "—"} /></div></Card>
-      <Card className="min-h-[620px] overflow-hidden"><div className="border-b border-white/[.06] p-4"><div className="flex items-center justify-between"><div className="text-sm font-semibold text-white">Place order</div><Settings2 size={15} className="text-[#68748a]" /></div><div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-white/[.05] p-1"><button onClick={() => setSide("BUY")} className={cn("rounded-lg py-2.5 text-xs font-bold", side === "BUY" ? "bg-[var(--positive)]/15 text-[var(--positive)]" : "text-[var(--muted)]")}>Buy</button><button onClick={() => setSide("SELL")} className={cn("rounded-lg py-2.5 text-xs font-bold", side === "SELL" ? "bg-[var(--negative)]/15 text-[var(--negative)]" : "text-[var(--muted)]")}>Sell</button></div></div><div className="space-y-5 p-4"><div className="flex items-center justify-between rounded-lg border border-white/[.07] bg-white/[.025] p-3 text-xs"><span className="text-[var(--muted)]">Instrument</span><span className="font-semibold text-white">{current?.symbol ?? "—"}</span></div><div><div className="mb-2 text-xs font-medium text-[var(--muted-strong)]">Order type</div><div className="relative"><select value={orderType} onChange={(event) => setOrderType(event.target.value as typeof orderType)} className="h-11 w-full appearance-none rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-sm text-white outline-none focus:border-[var(--accent)]"><option value="MARKET">Market order</option><option value="LIMIT">Limit order</option><option value="STOP_MARKET">Stop market</option><option value="STOP_LIMIT">Stop limit</option><option value="TAKE_PROFIT">Take profit</option><option value="TAKE_PROFIT_LIMIT">Take profit limit</option></select><ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#68748a]" /></div></div><Field label="Quantity" value={quantity} onChange={setQuantity} placeholder={current?.minimumQuantity ?? "0.00"} suffix={current?.baseAsset ?? "asset"} />{isConditional && <Field label="Trigger price" value={stopPrice} onChange={setStopPrice} placeholder="0.00" prefix="$" />}{isLimit && <Field label="Limit price" value={limitPrice} onChange={setLimitPrice} placeholder="0.00" prefix="$" />}<div className="rounded-xl border border-white/[.07] bg-white/[.025] p-3"><div className="flex items-center justify-between text-xs"><span className="text-[var(--muted)]">Estimated {isConditional ? "reference" : "execution"} price</span><span className="tabular font-semibold text-white">{estimatedPrice ? formatCurrency(estimatedPrice, estimatedPrice < 1 ? 5 : 2) : "—"}</span></div><div className="mt-3 flex items-center justify-between text-xs"><span className="text-[var(--muted)]">Estimated fee · 0.10%</span><span className="tabular text-[var(--muted-strong)]">{formatCurrency(fee)}</span></div><div className="mt-3 flex items-center justify-between border-t border-white/[.06] pt-3 text-xs"><span className="font-semibold text-[var(--muted-strong)]">{side === "BUY" ? "Estimated cost" : "Estimated proceeds"}</span><span className="tabular font-semibold text-white">{formatCurrency(total)}</span></div></div>{isConditional && <div className="flex gap-2 rounded-xl border border-amber-300/15 bg-amber-300/5 px-3 py-3 text-[10px] leading-4 text-amber-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />A trigger activates the order; the actual fill can differ because of bid/ask spread and simulated slippage.</div>}{message && <div className={cn("flex gap-2 rounded-xl border px-3 py-3 text-xs leading-5", message.tone === "positive" ? "border-[var(--positive)]/20 bg-[var(--positive)]/10 text-[var(--positive)]" : "border-[var(--negative)]/20 bg-[var(--negative)]/10 text-[var(--negative)]")} >{message.tone === "positive" ? <CheckCircle2 size={15} className="mt-0.5 shrink-0" /> : <AlertTriangle size={15} className="mt-0.5 shrink-0" />}{message.text}</div>}<Button onClick={submitOrder} disabled={submitting || !current} variant={side === "BUY" ? "primary" : "danger"} className="h-12 w-full">{submitting ? "Submitting…" : `${side === "BUY" ? "Buy" : "Sell"} ${current?.baseAsset ?? "asset"}`}</Button><div className="flex items-start gap-2 text-[10px] leading-4 text-[#657187]"><Info size={13} className="mt-0.5 shrink-0" />Simulation only. The browser cannot determine your authoritative balance or execution.</div></div></Card>
+  return <div className="page-enter">
+    <SectionHeading eyebrow="Execution workspace" title="Trading terminal" description="Market context, deliberate decisions, and virtual execution." action={<div className="flex flex-wrap items-center gap-3"><Badge tone={streamState === "Connected" ? "positive" : "warning"}>{streamState}</Badge><span className="text-xs text-[var(--muted)]">Cash <strong className="tabular text-white">{cash === null ? "—" : formatCurrency(cash)}</strong></span><Link href="/orders" className="text-xs text-[var(--accent-bright)]">Orders</Link></div>} />
+    {error && <p role="alert" className="mb-4 rounded-xl border border-[var(--negative)]/20 bg-[var(--negative)]/10 p-4 text-xs text-[var(--negative)]">{error}<Button size="sm" variant="ghost" onClick={() => setRefresh(value => value + 1)}>Retry</Button></p>}
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[200px_minmax(0,1fr)_320px]">
+      <Card className="max-h-[360px] overflow-y-auto xl:col-span-2 2xl:col-span-1 2xl:max-h-[760px]">
+        <div className="sticky top-0 z-10 space-y-3 border-b border-white/[.06] bg-[var(--surface)] p-4">
+          <div className="flex items-center justify-between"><h2 className="text-xs font-semibold">Watchlist</h2><Link href="/markets" aria-label="Manage watchlists" className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-white/5"><Plus size={16} /></Link></div>
+          <select aria-label="Terminal watchlist" value={listId === "all" ? "all" : list?.id ?? "all"} onChange={event => setListId(event.target.value)} className="h-11 w-full min-w-0 rounded-xl border border-white/10 bg-[var(--bg-soft)] px-2 text-xs"><option value="all">All spot markets</option>{watchlists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select>
+          <label className="relative block"><span className="sr-only">Search terminal markets</span><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" /><input aria-label="Search terminal markets" value={query} onChange={event => setQuery(event.target.value)} className="h-11 w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-2 text-xs" placeholder="Search" /></label>
+        </div>
+        {listError && <p role="alert" className="p-3 text-xs text-amber-300">{listError}</p>}
+        {!loaded ? <div className="p-4"><Skeleton className="h-36" /></div> : visible.length ? <div className="grid divide-y divide-white/[.045] sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-1">{visible.map(market => <button type="button" key={market.symbol} onClick={() => setSelected(market.symbol)} aria-pressed={selected === market.symbol} className={`min-w-0 px-4 py-3 text-left ${selected === market.symbol ? "bg-[var(--accent)]/12" : "hover:bg-white/[.035]"}`}><span className="flex justify-between gap-2 text-xs"><strong>{market.baseAsset}</strong><span className={Number(market.quote?.priceChangePct) < 0 ? "text-[var(--negative)]" : "text-[var(--positive)]"}>{market.quote?.priceChangePct == null ? "—" : formatPercent(market.quote.priceChangePct)}</span></span><span className="mt-2 block tabular text-xs text-[var(--muted)]">{market.quote?.lastPrice ? formatCurrency(market.quote.lastPrice) : "Awaiting quote"}</span></button>)}</div> : <EmptyState title="No matching spot markets" description="Choose another list or add spot symbols in Markets." />}
+      </Card>
+      <Card className="min-w-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[.06] p-4"><div><h2 className="text-base font-semibold">{current?.symbol ?? selected}</h2><p className="mt-1 text-xs text-[var(--muted)]">{current?.name ?? "Select an available spot market"}</p></div><div className="flex items-center gap-3"><div className="tabular text-lg font-semibold">{current?.quote?.lastPrice ? formatCurrency(current.quote.lastPrice, Number(current.quote.lastPrice) < 1 ? 5 : 2) : "—"}</div><Badge tone={fresh ? "positive" : "warning"}>{fresh ? "Live" : "Cached"}</Badge><IconButton label="Refresh market data" onClick={() => setRefresh(value => value + 1)}><RefreshCcw size={16} /></IconButton></div></div>
+        <TerminalChart key={`${selected}:${refresh}`} symbol={selected} />
+        <div className="grid grid-cols-3 gap-3 border-t border-white/[.06] p-4"><QuoteStat label="Bid" value={current?.quote?.bid ? formatCurrency(current.quote.bid) : "—"} /><QuoteStat label="Ask" value={current?.quote?.ask ? formatCurrency(current.quote.ask) : "—"} /><QuoteStat label="24h volume" value={current?.quote?.volume ? formatNumber(current.quote.volume, 0) : "—"} /></div>
+      </Card>
+      <Card className="overflow-hidden">{current ? <OrderTicket key={`${current.symbol}:${initialScope}`} market={current} scope={initialScope} fresh={fresh} onFilled={() => setRefresh(value => value + 1)} /> : <EmptyState title="Choose a market" description="Select an available spot symbol to prepare an order." />}</Card>
     </div>
-    {side === "BUY" && <Card className="mt-4 p-4"><h2 className="text-sm font-semibold text-white">Optional bracket exits</h2><p className="mt-1 text-xs text-[var(--muted)]">The stop and target reserve the same inventory. Filling one cancels the other.</p><div className="mt-4 grid gap-4 sm:grid-cols-2"><Field label="Bracket stop" value={bracketStop} onChange={setBracketStop} placeholder="Optional" prefix="$" /><Field label="Bracket target" value={bracketTarget} onChange={setBracketTarget} placeholder="Optional" prefix="$" /></div></Card>}
-    <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]"><Card className="overflow-hidden"><div className="flex items-center justify-between border-b border-white/[.06] px-5 py-4"><div><div className="text-sm font-semibold text-white">Open positions</div><div className="mt-1 text-xs text-[var(--muted)]">Positions update after fills</div></div><Link href="/portfolio" className="text-xs text-[var(--accent-bright)]">View portfolio</Link></div>{positions.length ? <div className="divide-y divide-white/[.05]">{positions.map((position) => <div key={position.symbol} className="flex items-center justify-between px-5 py-3.5"><div><div className="text-xs font-semibold text-white">{position.symbol}</div><div className="mt-1 text-[10px] text-[var(--muted)]">{formatNumber(position.quantity, 8)} units · {formatCurrency(position.marketValue)}</div></div><div className={`tabular text-right text-xs font-semibold ${Number(position.unrealizedPnl) >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}>{formatCurrency(position.unrealizedPnl)}</div></div>)}</div> : <div className="p-8 text-center text-xs text-[var(--muted)]">No open positions.</div>}</Card><Card><div className="flex items-center justify-between border-b border-white/[.06] px-5 py-4"><div><div className="text-sm font-semibold text-white">Execution notes</div><div className="mt-1 text-xs text-[var(--muted)]">Read before your first order</div></div><Layers3 size={17} className="text-[var(--accent-bright)]" /></div><div className="space-y-3 p-5 text-xs leading-5 text-[var(--muted)]"><p className="flex gap-3"><span className="font-bold text-[var(--accent-bright)]">01</span>Market buys use the current simulated ask; sells use the current bid.</p><p className="flex gap-3"><span className="font-bold text-[var(--accent-bright)]">02</span>Limit and conditional orders reserve buying power or quantity.</p><p className="flex gap-3"><span className="font-bold text-[var(--accent-bright)]">03</span>Quotes older than the safety threshold pause new execution.</p></div></Card></div>
+    <div className="mt-5 grid gap-5 lg:grid-cols-2">
+      <Card><div className="flex items-center justify-between border-b border-white/[.06] p-5"><h2 className="text-sm font-semibold">Open positions</h2><Link href="/portfolio" className="text-xs text-[var(--accent-bright)]">View portfolio</Link></div>{positions.length ? positions.map(position => <div key={position.symbol} className="flex items-center justify-between gap-3 border-b border-white/[.04] p-4"><div><strong className="text-xs">{position.symbol}</strong><p className="mt-1 text-[10px] text-[var(--muted)]">{formatNumber(position.quantity, 8)} units · {formatCurrency(position.marketValue)}</p></div><span className={`tabular text-xs ${Number(position.unrealizedPnl) >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}>{formatCurrency(position.unrealizedPnl)}</span></div>) : <EmptyState title="No open spot positions" description="Your positions update after a simulated fill." />}</Card>
+      <Card className="p-5"><h2 className="flex items-center gap-2 text-sm font-semibold"><Layers3 size={17} />Execution notes</h2><div className="mt-4 space-y-3 text-xs leading-6 text-[var(--muted)]"><p>Market buys use the current ask; sells use the bid. The simulator uses full top-of-book fills without market-depth modelling.</p><p>Limit and conditional orders reserve cash or inventory. Triggered orders can fill at a different price from their trigger.</p><p>Stale quotes pause execution. Every submission revalidates balances, reservations, and challenge rules on the server.</p></div></Card>
+    </div>
   </div>;
 }
 
-function Field({ label, value, onChange, placeholder, suffix, prefix }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; suffix?: string; prefix?: string }) { return <label className="block"><span className="mb-2 block text-xs font-medium text-[var(--muted-strong)]">{label}</span><span className="relative block"><input aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} inputMode="decimal" className={cn("h-11 w-full rounded-xl border border-white/[.1] bg-white/[.045] text-right text-sm text-white outline-none placeholder:text-[#586377] focus:border-[var(--accent)]", prefix ? "pl-8 pr-3" : "px-3", suffix ? "pr-16" : "")} />{prefix && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[var(--muted)]">{prefix}</span>}{suffix && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[var(--muted)]">{suffix}</span>}</span></label>; }
-function QuoteStat({ label, value }: { label: string; value: string }) { return <div className="bg-[var(--surface)] px-4 py-3"><div className="text-[10px] uppercase tracking-[.14em] text-[#657187]">{label}</div><div className="mt-1 tabular text-xs font-semibold text-[var(--muted-strong)]">{value}</div></div>; }
+function OrderTicket({ market, scope, fresh, onFilled }: { market: Market; scope: string; fresh: boolean; onFilled: () => void }) {
+  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [orderType, setOrderType] = useState("MARKET");
+  const [quantity, setQuantity] = useState("");
+  const [limitPrice, setLimitPrice] = useState(market.quote?.lastPrice ?? "");
+  const [stopPrice, setStopPrice] = useState("");
+  const [bracketStop, setBracketStop] = useState("");
+  const [bracketTarget, setBracketTarget] = useState("");
+  const [timeInForce, setTimeInForce] = useState("GTC");
+  const [busy, setBusy] = useState(false);
+  const locked = useRef(false);
+  const [message, setMessage] = useState<{ error?: boolean; text: string; id?: string } | null>(null);
+  const conditional = !["MARKET", "LIMIT"].includes(orderType);
+  const payload = { symbol: market.symbol, side, orderType, quantity, limitPrice: orderType.includes("LIMIT") ? limitPrice : undefined, stopPrice: conditional ? stopPrice : undefined, bracketStop: side === "BUY" ? bracketStop || undefined : undefined, bracketTarget: side === "BUY" ? bracketTarget || undefined : undefined, timeInForce: conditional && ["IOC", "FOK"].includes(timeInForce) ? "GTC" : timeInForce, scope };
+  async function submit(event: React.FormEvent) {
+    event.preventDefault(); if (locked.current) return;
+    locked.current = true; setBusy(true); setMessage(null);
+    try { const body = await submitPaperOrder(payload); setMessage({ text: `Order ${body.order.status.toLowerCase().replaceAll("_", " ")}.`, id: body.order.id }); setQuantity(""); onFilled(); }
+    catch (caught) { setMessage({ error: true, text: caught instanceof Error ? caught.message : "Unable to submit order." }); }
+    finally { locked.current = false; setBusy(false); }
+  }
+  return <form onSubmit={submit} className="p-4">
+    <h2 className="text-sm font-semibold">Place order</h2><fieldset disabled={busy} className="mt-4 space-y-4">
+      <div className="grid grid-cols-2 gap-2">{(["BUY", "SELL"] as const).map(value => <button key={value} type="button" aria-pressed={side === value} onClick={() => setSide(value)} className={`min-h-11 rounded-xl text-xs font-bold ${side === value ? value === "BUY" ? "bg-[var(--positive)]/15 text-[var(--positive)]" : "bg-[var(--negative)]/15 text-[var(--negative)]" : "bg-white/5 text-[var(--muted)]"}`}>{value === "BUY" ? "Buy" : "Sell"}</button>)}</div>
+      <label className="block text-xs text-[var(--muted-strong)]">Order type<select value={orderType} onChange={event => setOrderType(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-[var(--bg-soft)] px-3 text-sm">{["MARKET", "LIMIT", "STOP_MARKET", "STOP_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"].map(type => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}</select></label>
+      <Field label="Quantity" value={quantity} onChange={setQuantity} placeholder={market.minimumQuantity} required />
+      {conditional && <Field label="Trigger price" value={stopPrice} onChange={setStopPrice} required />}
+      {orderType.includes("LIMIT") && <Field label="Limit price" value={limitPrice} onChange={setLimitPrice} required />}
+      <label className="block text-xs text-[var(--muted-strong)]">Time in force<select value={payload.timeInForce} onChange={event => setTimeInForce(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-[var(--bg-soft)] px-3 text-sm">{(conditional ? ["GTC", "DAY"] : ["GTC", "DAY", "IOC", "FOK"]).map(value => <option key={value}>{value}</option>)}</select></label>
+      {side === "BUY" && <details className="rounded-xl border border-white/[.08] p-3"><summary className="cursor-pointer text-xs font-semibold">Optional bracket exits</summary><p className="my-3 text-[10px] leading-5 text-[var(--muted)]">The stop and target share inventory. Filling one cancels the other.</p><div className="space-y-3"><Field label="Bracket stop" value={bracketStop} onChange={setBracketStop} /><Field label="Bracket target" value={bracketTarget} onChange={setBracketTarget} /></div></details>}
+      <OrderPreview payload={payload} />
+      {!fresh && <p className="flex gap-2 text-xs text-amber-200"><AlertTriangle size={14} className="shrink-0" />Quote is cached. The server requires a fresh quote at submission.</p>}
+      {message && <div role={message.error ? "alert" : "status"} className={`rounded-xl p-3 text-xs leading-5 ${message.error ? "bg-[var(--negative)]/10 text-[var(--negative)]" : "bg-[var(--positive)]/10 text-[var(--positive)]"}`}>{message.text}{message.id && <Link href={`/orders/${message.id}`} className="ml-2 underline">View order</Link>}</div>}
+      <Button type="submit" variant={side === "BUY" ? "primary" : "danger"} disabled={busy} className="min-h-12 w-full">{busy ? "Submitting…" : `${side === "BUY" ? "Buy" : "Sell"} ${market.baseAsset}`}</Button>
+    </fieldset>
+  </form>;
+}
+function Field({ label, value, onChange, placeholder = "Optional", required = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; required?: boolean }) {
+  return <label className="block text-xs text-[var(--muted-strong)]">{label}<input aria-label={label} required={required} value={value} onChange={event => onChange(event.target.value)} inputMode="decimal" placeholder={placeholder} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-right text-sm" /></label>;
+}
+function QuoteStat({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><div className="text-[10px] text-[var(--muted)]">{label}</div><div className="mt-1 break-words tabular text-xs text-[var(--muted-strong)]">{value}</div></div>; }

@@ -7,6 +7,11 @@ import { withAccount } from "./transaction";
 import { getQuote, isFresh } from "@/server/market-data/service";
 import { getTradingConfig } from "@/server/config";
 import { assertWorkerRunning, WorkerLeaseLostError } from "@/server/worker-context";
+import { recordOrderEvent } from "./order-events";
+import { createNotification } from "@/server/notifications";
+import type { TradingAccount } from "@prisma/client";
+import type { Tx } from "./transaction";
+import { Decimal } from "@/lib/decimal";
 export { getPortfolio, getPortfolioHistory } from "./valuation";
 
 const positive = z.string().max(40).regex(/^\d+(\.\d{1,8})?$/).refine(v => D(v).gt(0) && D(v).lte("1000000000"), "Must be positive and no larger than 1 billion.");
@@ -66,61 +71,15 @@ export async function createOrder(userId: string, input: OrderInput) {
       if (existing.requestFingerprint && existing.requestFingerprint !== fingerprint) throw new Error("Client order ID was already used with different order details.");
       return existing;
     }
-    const settings = await getTradingConfig(tx);
-    const quote = await tx.marketQuote.findUnique({ where: { instrumentId: instrument.id } });
-    const i = await tx.instrument.findUniqueOrThrow({ where: { id: instrument.id } });
-    if (i.tradingStatus !== "ACTIVE" || i.quoteAsset !== "USD") throw new Error("Instrument is not available for this USD account.");
-    if (!quote || !isFresh(quote, Date.now(), settings.quoteMaxAgeMs) || !quote.bid || !quote.ask || quote.mode !== a.dataMode) throw new Error("Market data is stale or unavailable. Execution is paused.");
-    const derivative = i.instrumentType !== "SPOT";
-    if (!D(i.contractMultiplier).eq(1) || i.instrumentType === "FUTURE") throw new Error("This contract specification is not supported by the execution engine.");
-    if (!derivative && (p.leverage !== 1 || p.positionSide === "SHORT" || p.reduceOnly)) throw new Error("Unsupported leverage or short-selling mode.");
-    if (!p.reduceOnly && D(p.leverage).gt(i.maximumLeverage)) throw new Error("Unsupported leverage or short-selling mode.");
-    if (p.scope !== "main") {
-      const challenge = await tx.challenge.findUnique({ where: { id: p.scope } });
-      const rules = challenge?.configuration as { symbols?: string[]; eligibleMarkets?: string[]; maxLeverage?: number; orderTypes?: string[] } | null;
-      if (!challenge || challenge.startTime > new Date() || challenge.endTime <= new Date() || !["ACTIVE", "UPCOMING"].includes(challenge.status)) throw new Error("Challenge is outside its trading window.");
-      if (p.leverage > (rules?.maxLeverage ?? 1) || rules?.symbols && !rules.symbols.includes(p.symbol) || rules?.eligibleMarkets && !rules.eligibleMarkets.includes(i.assetClass) || rules?.orderTypes && !rules.orderTypes.includes(p.orderType)) throw new Error("Order violates challenge rules.");
-    }
-    if (D(p.quantity).lt(i.minimumQuantity)) throw new Error(`Minimum quantity: ${i.minimumQuantity}.`);
-    for (const price of [p.limitPrice, p.stopPrice, p.bracketStop, p.bracketTarget]) {
-      if (price && !D(price).mod(i.tickSize.toString()).eq(0)) throw new Error(`Prices must use tick size ${i.tickSize}.`);
-    }
-    if (await tx.order.count({ where: { accountId: a.id, status: "OPEN" } }) >= 200) throw new Error("Open-order limit reached. Cancel an order before adding another.");
-    const closing = derivative ? p.reduceOnly : p.side === "SELL";
-    if (derivative && p.side !== (p.positionSide === "LONG" ? (closing ? "SELL" : "BUY") : (closing ? "BUY" : "SELL"))) throw new Error("Invalid side for position direction.");
-    if (p.orderType.includes("LIMIT") && !p.limitPrice) throw new Error("A limit price is required.");
-    if (!["MARKET", "LIMIT"].includes(p.orderType) && !p.stopPrice) throw new Error("A trigger price is required.");
-    if (p.bracketStop || p.bracketTarget) {
-      if (closing) throw new Error("Brackets can only attach to an opening order.");
-      const ref = D(p.limitPrice ?? (p.side === "BUY" ? quote.ask : quote.bid));
-      const long = p.positionSide === "LONG";
-      if (p.bracketStop && (long ? D(p.bracketStop).gte(ref) : D(p.bracketStop).lte(ref)) || p.bracketTarget && (long ? D(p.bracketTarget).lte(ref) : D(p.bracketTarget).gte(ref))) throw new Error("Bracket exits must be on the correct sides of the entry price.");
-    }
-    const rate = D(settings.feeRate);
-    const price = D(p.limitPrice ?? p.stopPrice ?? (p.side === "BUY" ? quote.ask : quote.bid));
-    if (price.mul(p.quantity).gt(1000000)) throw new Error("Maximum simulated order notional is $1,000,000.");
-    let reserve = D(0), reserveQty = D(0);
-    if (!closing) {
-      const position = await tx.position.findUnique({ where: { accountId_instrumentId_positionSide: { accountId: a.id, instrumentId: i.id, positionSide: p.positionSide } } });
-      if (derivative && position && !D(position.leverage).eq(p.leverage)) throw new Error("Close the existing position before changing its leverage.");
-      reserve = price.mul(p.quantity).div(derivative ? p.leverage : 1).plus(price.mul(p.quantity).mul(rate));
-      if (D(a.availableCash).lt(reserve)) throw new Error("Insufficient available cash or margin.");
-    } else {
-      const position = await tx.position.findUnique({ where: { accountId_instrumentId_positionSide: { accountId: a.id, instrumentId: i.id, positionSide: p.positionSide } } });
-      const exits = await tx.order.findMany({ where: { accountId: a.id, instrumentId: i.id, positionSide: p.positionSide, status: "OPEN", reservedQuantity: { gt: 0 } } });
-      const grouped = new Map(exits.map(o => [o.orderGroupId ?? o.id, D(o.reservedQuantity)]));
-      const reservedQty = [...grouped.values()].reduce((s, q) => s.plus(q), D(0));
-      // Market closes can consume bracket-protected inventory. Settlement resizes surviving exits atomically.
-      const reservedNonBracket = exits.filter(o => !o.orderGroupId).reduce((s, o) => s.plus(o.reservedQuantity), D(0));
-      if (!position || D(position.quantity).minus(p.orderType === "MARKET" ? reservedNonBracket : reservedQty).lt(p.quantity)) throw new Error("Insufficient unreserved holdings.");
-      reserveQty = D(p.quantity);
-    }
-    const expiresAt = p.expiresAt ? new Date(p.expiresAt) : p.timeInForce === "DAY" ? new Date(new Date().setUTCHours(23, 59, 59, 999)) : null;
-    if (expiresAt && expiresAt <= new Date()) throw new Error("Expiration must be in the future.");
+    const { i, quote, closing, price, rate, reserve, reserveQty, expiresAt } = await validateOrder(tx, a, instrument.id, p);
     const order = await tx.order.create({ data: { accountId: a.id, instrumentId: i.id, clientOrderId: p.clientOrderId, requestFingerprint: fingerprint, side: p.side, orderType: p.orderType, quantity: p.quantity, limitPrice: p.limitPrice, stopPrice: p.stopPrice, bracketStop: p.bracketStop, bracketTarget: p.bracketTarget, positionSide: p.positionSide, leverage: p.leverage, reduceOnly: closing, status: "OPEN", reservedAmount: fixed(reserve), reservedQuantity: fixed(reserveQty), feeRate: fixed(rate), estimatedFee: fixed(price.mul(p.quantity).mul(rate)), timeInForce: p.timeInForce, expiresAt } });
+    await recordOrderEvent(tx, order.id, "CREATED", "Order accepted and reservation recorded.", "OPEN", { reservedAmount: fixed(reserve).toString(), reservedQuantity: fixed(reserveQty).toString() });
     await tx.tradingAccount.update({ where: { id: a.id }, data: { availableCash: { decrement: fixed(reserve) }, reservedCash: { increment: fixed(reserve) } } });
     const state = conditionalState(order.orderType, order.side, D(quote.bid), D(quote.ask), order.limitPrice && D(order.limitPrice), order.stopPrice && D(order.stopPrice), false);
-    if (state.triggered) await tx.order.update({ where: { id: order.id }, data: { triggeredAt: new Date() } });
+    if (state.triggered) {
+      await tx.order.update({ where: { id: order.id }, data: { triggeredAt: new Date() } });
+      await recordOrderEvent(tx, order.id, "TRIGGERED", "Conditional trigger reached at submission.", "OPEN");
+    }
     if (state.executable) return settle(tx, order, await tx.tradingAccount.findUniqueOrThrow({ where: { id: a.id } }), i, quote);
     if (["IOC", "FOK"].includes(p.timeInForce)) { await releaseOrder(tx, order, "CANCELLED", "Not immediately executable"); return tx.order.findUniqueOrThrow({ where: { id: order.id } }); }
     return order;
@@ -166,13 +125,14 @@ export async function processOpenOrders() {
       const state = conditionalState(order.orderType, order.side, D(quote.bid), D(quote.ask), order.limitPrice && D(order.limitPrice), order.stopPrice && D(order.stopPrice), !!order.triggeredAt);
       if (state.triggered && !order.triggeredAt) {
         await tx.order.update({ where: { id: order.id }, data: { triggeredAt: new Date() } });
-        await tx.notification.create({ data: { userId: order.account.userId, notificationType: "ORDER_TRIGGERED", title: "Conditional order triggered", message: `${order.instrument.symbol}: trigger reached. ${order.orderType.includes("LIMIT") ? "Limit constraint still applies." : "Market execution pending."}` } });
+        await recordOrderEvent(tx, order.id, "TRIGGERED", "Conditional trigger reached.", "OPEN", { orderType: order.orderType });
+        await createNotification(tx, { user: { connect: { id: order.account.userId } }, notificationType: "ORDER_TRIGGERED", title: "Conditional order triggered", message: `${order.instrument.symbol}: trigger reached. ${order.orderType.includes("LIMIT") ? "Limit constraint still applies." : "Market execution pending."}` });
       }
       if (!state.executable) return;
       const cost = D(order.side === "BUY" ? quote.ask : quote.bid).mul(D(order.quantity).minus(order.filledQuantity));
       if (!order.reduceOnly && D(order.account.availableCash).plus(order.reservedAmount).lt(cost.div(order.instrument.instrumentType === "SPOT" ? 1 : order.leverage).plus(cost.mul(order.feeRate)))) {
         await releaseOrder(tx, order, "REJECTED", "Insufficient funds after market gap");
-        await tx.notification.create({ data: { userId: order.account.userId, notificationType: "ORDER_REJECTED", title: "Order rejected at trigger", message: "Market gap exceeded available cash or margin. Reservation released." } }); return;
+        return;
       }
       await settle(tx, order, order.account, order.instrument, quote); filled++;
     }); } catch (error) {
@@ -186,12 +146,84 @@ export async function processOpenOrders() {
   return filled;
 }
 export async function getOrder(userId: string, id: string, scope = "main") {
-  return db.order.findFirst({ where: { id, account: { userId, scope } }, include: { instrument: true, executions: { orderBy: { executionTimestamp: "desc" } } } });
+  return db.order.findFirst({ where: { id, account: { userId, scope } }, include: { account: { select: { scope: true } }, instrument: true, executions: { orderBy: [{ executionTimestamp: "desc" }, { id: "desc" }] }, events: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] }, childOrders: { where: { account: { userId, scope } }, include: { instrument: true, events: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } }, orderBy: { createdAt: "asc" } } } });
 }
 export async function getOrders(userId: string, status?: string, scope = "main") {
   // Closed challenge accounts retain a readable immutable audit trail.
   const account = await db.tradingAccount.findUnique({ where: { userId_scope: { userId, scope } } });
   if (!account) throw new Error("Trading account unavailable.");
   const valid = ["OPEN", "FILLED", "CANCELLED", "REJECTED", "EXPIRED", "PENDING", "PARTIALLY_FILLED"];
-  return db.order.findMany({ where: { accountId: account.id, ...(status && valid.includes(status) ? { status: status as "OPEN" } : {}) }, include: { instrument: true, executions: { orderBy: { executionTimestamp: "desc" } } }, orderBy: { createdAt: "desc" }, take: 500 });
+  return db.order.findMany({ where: { accountId: account.id, ...(status === "OPEN" ? { status: { in: ["OPEN", "PARTIALLY_FILLED", "PENDING"] } } : status && valid.includes(status) ? { status: status as "FILLED" } : {}) }, include: { instrument: true, executions: { orderBy: { executionTimestamp: "desc" } } }, orderBy: { createdAt: "desc" }, take: 500 });
+}
+
+// Submission and preview share the exact validation/reservation boundary.
+async function validateOrder(tx: Tx, a: TradingAccount, instrumentId: string, p: z.output<typeof orderSchema>) {
+  const settings = await getTradingConfig(tx);
+  const quote = await tx.marketQuote.findUnique({ where: { instrumentId } });
+  const i = await tx.instrument.findUniqueOrThrow({ where: { id: instrumentId } });
+  if (i.tradingStatus !== "ACTIVE" || i.quoteAsset !== "USD") throw new Error("Instrument is not available for this USD account.");
+  if (!quote || !isFresh(quote, Date.now(), settings.quoteMaxAgeMs) || !quote.bid || !quote.ask || quote.mode !== a.dataMode) throw new Error("Market data is stale or unavailable. Execution is paused.");
+  const derivative = i.instrumentType !== "SPOT";
+  if (!D(i.contractMultiplier).eq(1) || i.instrumentType === "FUTURE") throw new Error("This contract specification is not supported by the execution engine.");
+  if (!derivative && (p.leverage !== 1 || p.positionSide === "SHORT" || p.reduceOnly)) throw new Error("Unsupported leverage or short-selling mode.");
+  if (!p.reduceOnly && D(p.leverage).gt(i.maximumLeverage)) throw new Error("Unsupported leverage or short-selling mode.");
+  if (p.scope !== "main") {
+    const challenge = await tx.challenge.findUnique({ where: { id: p.scope } });
+    const rules = challenge?.configuration as { symbols?: string[]; eligibleMarkets?: string[]; maxLeverage?: number; orderTypes?: string[] } | null;
+    if (!challenge || challenge.startTime > new Date() || challenge.endTime <= new Date() || !["ACTIVE", "UPCOMING"].includes(challenge.status)) throw new Error("Challenge is outside its trading window.");
+    if (p.leverage > (rules?.maxLeverage ?? 1) || rules?.symbols && !rules.symbols.includes(p.symbol) || rules?.eligibleMarkets && !rules.eligibleMarkets.includes(i.assetClass) || rules?.orderTypes && !rules.orderTypes.includes(p.orderType)) throw new Error("Order violates challenge rules.");
+  }
+  if (D(p.quantity).lt(i.minimumQuantity)) throw new Error(`Minimum quantity: ${i.minimumQuantity}.`);
+  for (const value of [p.limitPrice, p.stopPrice, p.bracketStop, p.bracketTarget]) if (value && !D(value).mod(i.tickSize.toString()).eq(0)) throw new Error(`Prices must use tick size ${i.tickSize}.`);
+  if (await tx.order.count({ where: { accountId: a.id, status: { in: ["OPEN", "PARTIALLY_FILLED", "PENDING"] } } }) >= 200) throw new Error("Open-order limit reached. Cancel an order before adding another.");
+  const closing = derivative ? p.reduceOnly : p.side === "SELL";
+  if (derivative && p.side !== (p.positionSide === "LONG" ? (closing ? "SELL" : "BUY") : (closing ? "BUY" : "SELL"))) throw new Error("Invalid side for position direction.");
+  const state = conditionalState(p.orderType, p.side, D(quote.bid), D(quote.ask), p.limitPrice ? D(p.limitPrice) : null, p.stopPrice ? D(p.stopPrice) : null, false);
+  const price = D(p.limitPrice ?? p.stopPrice ?? (p.side === "BUY" ? quote.ask : quote.bid));
+  const executionPrice = state.executable ? D(p.side === "BUY" ? quote.ask : quote.bid) : price;
+  if (p.bracketStop || p.bracketTarget) {
+    if (closing) throw new Error("Brackets can only attach to an opening order.");
+    const long = p.positionSide === "LONG";
+    if (p.bracketStop && (long ? D(p.bracketStop).gte(executionPrice) : D(p.bracketStop).lte(executionPrice)) || p.bracketTarget && (long ? D(p.bracketTarget).lte(executionPrice) : D(p.bracketTarget).gte(executionPrice))) throw new Error("Bracket exits must be on the correct sides of the entry price.");
+  }
+  const rate = D(settings.feeRate);
+  if (Decimal.max(price, executionPrice).mul(p.quantity).gt(1000000)) throw new Error("Maximum simulated order notional is $1,000,000.");
+  const position = await tx.position.findUnique({ where: { accountId_instrumentId_positionSide: { accountId: a.id, instrumentId: i.id, positionSide: p.positionSide } } });
+  let reserve = D(0), reserveQty = D(0), maximumQuantity = D(0);
+  if (!closing) {
+    if (derivative && position && !D(position.leverage).eq(p.leverage)) throw new Error("Close the existing position before changing its leverage.");
+    const unitCost = price.div(derivative ? p.leverage : 1).plus(price.mul(rate));
+    const immediateCost = executionPrice.mul(p.quantity).div(derivative ? p.leverage : 1).plus(executionPrice.mul(p.quantity).mul(rate));
+    reserve = unitCost.mul(p.quantity);
+    if (D(a.availableCash).lt(Decimal.max(reserve, immediateCost))) throw new Error("Insufficient available cash or margin.");
+    maximumQuantity = D(a.availableCash).div(Decimal.max(unitCost, executionPrice.div(derivative ? p.leverage : 1).plus(executionPrice.mul(rate))));
+  } else {
+    const exits = await tx.order.findMany({ where: { accountId: a.id, instrumentId: i.id, positionSide: p.positionSide, status: { in: ["OPEN", "PARTIALLY_FILLED", "PENDING"] }, reservedQuantity: { gt: 0 } } });
+    const grouped = new Map(exits.filter(exit => p.orderType !== "MARKET" || !exit.orderGroupId).map(exit => [exit.orderGroupId ?? exit.id, D(exit.reservedQuantity)]));
+    maximumQuantity = D(position?.quantity ?? 0).minus([...grouped.values()].reduce((sum, value) => sum.plus(value), D(0)));
+    if (!position || maximumQuantity.lt(p.quantity)) throw new Error("Insufficient unreserved holdings.");
+    reserveQty = D(p.quantity);
+  }
+  const expiresAt = p.expiresAt ? new Date(p.expiresAt) : p.timeInForce === "DAY" ? new Date(new Date().setUTCHours(23, 59, 59, 999)) : null;
+  if (expiresAt && expiresAt <= new Date()) throw new Error("Expiration must be in the future.");
+  return { i, quote: { ...quote, bid: quote.bid, ask: quote.ask }, closing, derivative, price, executionPrice, state, rate, reserve, reserveQty, expiresAt, position, maximumQuantity: Decimal.min(maximumQuantity, D(1000000).div(Decimal.max(price, executionPrice))) };
+}
+
+export async function previewOrder(userId: string, input: OrderInput) {
+  const p = orderSchema.parse(input);
+  const account = await accountFor(userId, p.scope);
+  const { instrument } = await getQuote(p.symbol, true);
+  return withAccount(account.id, async tx => {
+    const a = await tx.tradingAccount.findUniqueOrThrow({ where: { id: account.id }, include: { user: true } });
+    if (a.accountStatus !== "ACTIVE" || a.user.accountStatus !== "ACTIVE") throw new Error("Account is suspended.");
+    const v = await validateOrder(tx, a, instrument.id, p);
+    const notional = v.executionPrice.mul(p.quantity), fee = notional.mul(v.rate);
+    let cashChange = notional.div(v.derivative ? p.leverage : 1).plus(fee).neg();
+    if (v.closing) {
+      const pnl = v.position ? v.executionPrice.minus(v.position.averageEntryPrice.toString()).mul(p.quantity).mul(p.positionSide === "LONG" ? 1 : -1) : D(0);
+      cashChange = v.derivative && v.position ? Decimal.max(0, D(v.position.initialMargin).mul(p.quantity).div(v.position.quantity.toString()).plus(pnl).minus(fee)) : notional.minus(fee);
+    }
+    const cancelled = !v.state.executable && ["IOC", "FOK"].includes(p.timeInForce);
+    return { scope: p.scope, symbol: p.symbol, executionPrice: fixed(v.executionPrice), notional: fixed(notional), fee: fixed(fee), reservedAmount: cancelled ? "0" : fixed(v.reserve), reservedQuantity: cancelled ? "0" : fixed(v.reserveQty), availableCashAfter: fixed(D(a.availableCash).plus(v.state.executable ? cashChange : cancelled ? D(0) : v.reserve.neg())), maximumQuantity: v.maximumQuantity.toDecimalPlaces(8, Decimal.ROUND_DOWN).toFixed(), executable: v.state.executable, outcome: v.state.executable ? "Immediate simulated fill" : cancelled ? "Not executable: order will cancel" : "Pending market conditions", quoteTimestamp: v.quote.sourceTimestamp?.toISOString() ?? null, warnings: v.state.executable ? [] : ["Future execution price and available funds may change before the trigger or limit is reached."] };
+  });
 }

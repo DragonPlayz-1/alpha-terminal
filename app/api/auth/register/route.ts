@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { apiError, apiSuccess, isUniqueConstraintError } from "@/lib/http";
+import { apiError, apiException, apiRateLimited, apiSuccess, isDatabaseError, isUniqueConstraintError } from "@/lib/http";
 import { createSession } from "@/server/auth/session";
 import { hashPassword } from "@/server/auth/password";
 import { enforceRateLimit } from "@/server/auth/rate-limit";
@@ -16,25 +16,26 @@ const schema = z.object({
 }).strict();
 
 export async function POST(request: NextRequest) {
-  const ip = clientRateKey(request);
-  const rate = await enforceRateLimit(`register:${ip}`, 8, 60_000);
-  if (!rate.allowed) return apiError("Too many registration attempts. Please try again shortly.", 429, "RATE_LIMITED");
-
-  let body: unknown;
-  try { body = await request.json(); } catch { return apiError("Invalid JSON body."); }
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) return apiError(parsed.error.issues[0]?.message ?? "Invalid registration details.");
-
-  const email = parsed.data.email.toLowerCase();
-  const username = parsed.data.username.toLowerCase();
-  const existing = await db.user.findFirst({ where: { OR: [{ email }, { username }] }, select: { email: true, username: true } });
-  if (existing?.email === email) return apiError("An account with that email already exists.", 409, "EMAIL_TAKEN");
-  if (existing?.username === username) return apiError("That username is already in use.", 409, "USERNAME_TAKEN");
-
-  const passwordHash = await hashPassword(parsed.data.password);
-  let user;
   try {
-    user = await db.$transaction(async (tx) => {
+    const ip = clientRateKey(request);
+    const rate = await enforceRateLimit(`register:${ip}`, 8, 60_000);
+    if (!rate.allowed) return apiRateLimited("Too many registration attempts. Please try again shortly.");
+
+    let body: unknown;
+    try { body = await request.json(); } catch { return apiError("Invalid JSON body."); }
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) return apiError(parsed.error.issues[0]?.message ?? "Invalid registration details.");
+
+    const email = parsed.data.email.toLowerCase();
+    const username = parsed.data.username.toLowerCase();
+    const existing = await db.user.findFirst({ where: { OR: [{ email }, { username }] }, select: { email: true, username: true } });
+    if (existing?.email === email) return apiError("An account with that email already exists.", 409, "EMAIL_TAKEN");
+    if (existing?.username === username) return apiError("That username is already in use.", 409, "USERNAME_TAKEN");
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    let user;
+    try {
+      user = await db.$transaction(async (tx) => {
       const created = await tx.user.create({
         data: {
           username,
@@ -56,12 +57,17 @@ export async function POST(request: NextRequest) {
       });
       await tx.auditLog.create({ data: { userId: created.id, action: "ACCOUNT_CREATED", entityType: "User", entityId: created.id } });
       return created;
-    });
-  } catch (error) {
-    if (isUniqueConstraintError(error)) return apiError("That email or username is already in use.", 409, "ACCOUNT_EXISTS");
-    throw error;
-  }
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return apiError("That email or username is already in use.", 409, "ACCOUNT_EXISTS");
+      if (isDatabaseError(error)) return apiException(error);
+      throw error;
+    }
 
-  await createSession(user.id);
-  return apiSuccess({ user: { id: user.id, username: user.username, email: user.email } }, 201);
+    try { await createSession(user.id, user.passwordHash); }
+    catch (error) { return apiException(error, "Your account was created, but sign-in could not finish. Please sign in with your new credentials.", 503, "ACCOUNT_CREATED_SESSION_FAILED"); }
+    return apiSuccess({ user: { id: user.id, username: user.username, email: user.email } }, 201);
+  } catch (error) {
+    return apiException(error, "Unable to create your account. Please try again.", 503, "AUTH_UNAVAILABLE");
+  }
 }
